@@ -1,0 +1,61 @@
+name: Runner Diagnosis (disabled)
+
+# ── 诊断结论（2026-10-08，已完成，保留作证据）─────────────────────────
+#
+# 症状：所有 job 4~6 秒失败，`runner_id: 0`、`runner_name: ''`、`steps: []`。
+#
+# 已排除的可能：
+#   · 文件没推上去 —— 远端/本地 40 个 swift 文件差异为 0
+#   · project.yml 配置错误 —— 构建根本没开始跑
+#   · 重复类型声明等代码问题 —— 0 个 step 被执行
+#   · Actions 被仓库禁用 —— `GET /actions/permissions` 返回 enabled: true
+#   · macos-14 池的偶发问题 —— 换池、换超时、手动 dispatch 均无效
+#
+# 决定性验证：
+#   加入一个**只有 echo、不 checkout、不装任何依赖**的 ubuntu-latest 任务，
+#   结果同样拿不到 runner（runner_id: 0、steps: 0、2 秒结束）。
+#   → 与 macOS、与仓库内容、与 workflow 写法全部无关。
+#
+# 结论：账号 `miraphael` 在 GitHub Actions 层面被平台封锁。
+#   账号特征：创建于 2026-06-18（较新）、`plan` 字段返回 null、
+#   仓库内存在 BitByteData / SWCompression 等 fork。
+#
+# ── 复测记录 ────────────────────────────────────────────────────────
+# 2026-10-16（八天后）用 .github/workflows/probe.yml（极简 echo 任务）
+# 通过 workflow_dispatch API 复测，结论**仍是封锁**：
+#   run 38859740365：run_started_at 06:10:41Z → updated_at 06:10:45Z
+#   （4 秒结束）、conclusion: failure、jobs[].runner 为空、steps: []。
+#   与 10-08 的症状完全一致（runner_id: 0、steps: 0、几秒结束）。
+# 同期 Build iOS IPA 的 push 自动触发（06:05:50、06:10:20）同样失败。
+# → 账号级封锁持续中，不是偶发。
+#
+# 处置（2026-10-16 起）：Codemagic 也因账户 402（BILLING_NOT_ENABLED）
+#   中断，免费构建通道改迁：
+#   · 主通道：.circleci/config.yml（Free 30,000 credits/月，
+#     macOS 200 credits/分钟 → 约 150 分钟/月，够十几次构建）
+#   · 备选：azure-pipelines.yml（免费 1,800 分钟/月）
+#   · 本文件（build-ipa.yml）已改为仅手动触发、不再随 push 空跑，
+#     解封后网页端 Run workflow 或把 on: 改回 [push] 即可恢复自动构建。
+#
+# ⚠️ 故意不保留任何触发条件 —— 每次推送都跑一次失败构建只会污染 Actions 列表。
+
+on:
+  # 无触发条件：这个 workflow 只能在网页端手动点 Run（且已无意义）。
+  # 留文件不删是为了保住上面这段诊断结论，避免以后重新踩一遍。
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: '此诊断已完成，仅用于重新验证账号状态'
+        required: false
+        default: 'no'
+
+jobs:
+  ubuntu-probe:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'yes'
+    timeout-minutes: 5
+    steps:
+      - name: Probe
+        run: |
+          echo "runner OK"
+          echo "如果这里能跑，说明账号已解封，可切回 build-ipa.yml"

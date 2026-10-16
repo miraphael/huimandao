@@ -1,0 +1,112 @@
+name: Build iOS IPA
+
+# ── 触发条件（2026-10-16 改）────────────────────────────────────────
+# 原来带 `push: branches: [main]`，但账号 miraphael 自 2026-10-08 起被
+# GitHub Actions 平台级封锁（job 拿不到 runner，4 秒失败，详见 diag.yml），
+# 每次推送都跑一次注定失败的构建只会污染 Actions 列表。
+# 现在只保留手动触发：解封后网页端 Run workflow 即可产出 IPA；
+# 若想恢复自动构建，把下面的 workflow_dispatch 换成
+#   on: [push]  （branches: [main]）
+# 即可。本文件保留完整构建配置，是解封后的第一备用通道
+#（主通道现为 .circleci/config.yml，备选 azure-pipelines.yml）。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # ── runner 选择（2026-10-08 修正）────────────────────────────────────
+    # 原来用 macos-14：它**只装到 Xcode 16.2**，而 Nuke 13.x 的源码用了
+    # `nonisolated` 修饰符（Swift 6.1 / Xcode 16.3 起才支持），
+    # 于是编译 Nuke 自身时就报：
+    #   error: 'nonisolated' modifier cannot be applied to this declaration
+    #   （Nuke/Sources/Nuke/Pipeline/ImagePipeline.swift:72、
+    #     Nuke/Sources/Nuke/Prefetching/ImagePrefetcher.swift:78）
+    # 注意：错在**依赖的源码**里，不是我们的代码 —— 所以只能换工具链或降版本。
+    #
+    # macos-15 装有 Xcode 26.3 / 26.2 / 26.1.1 / 26.0.1 / 16.3，任一个都能编 Nuke 13。
+    # 下面的 "Select newest Xcode" 步骤会自动挑最新的那个。
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          # 挑版本号最大的 Xcode（macos-15 上通常是 26.x）。
+          # ⚠️ 必须是 16.3+：Nuke 13.x 依赖 `nonisolated`（Swift 6.1 语法）。
+          XC=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve SPM dependencies
+        run: |
+          xcodebuild -project 绘漫岛.xcodeproj -resolvePackageDependencies \
+            -scheme 绘漫岛 || true
+
+      - name: Build unsigned IPA
+        run: |
+          # ⚠️ 必须显式检查 xcodebuild 的退出码（2026-10-09 踩过的坑，
+          #    2026-10-16 修复）：
+          #    旧写法 `build 2>&1 | tee build.log | grep … | tail -60` 的管道
+          #    最后一条命令（grep/tail）返回 0 → 编译失败也继续往下跑，
+          #    而 Xcode 已把资源拷进 .app 但没有二进制 → 空壳 IPA 被打成
+          #    产物、步骤还标 success。现在先落盘再判退出码。
+          set -euo pipefail
+          set +e
+          xcodebuild -project 绘漫岛.xcodeproj \
+            -scheme 绘漫岛 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
+            -derivedDataPath build \
+            build > build.log 2>&1
+          BUILD_STATUS=$?
+          set -e
+          grep -E "error:|warning:|BUILD" build.log | tail -100 || true
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            echo "❌ xcodebuild 失败（exit $BUILD_STATUS），完整日志见 build.log 产物"
+            tail -60 build.log
+            exit 1
+          fi
+
+          APP=$(ls -d build/Build/Products/Release-iphoneos/*.app 2>/dev/null | head -1)
+          if [ -z "$APP" ]; then
+            echo "❌ 找不到构建产物 .app"
+            exit 1
+          fi
+          EXEC_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null || echo "")
+          if [ -z "$EXEC_NAME" ] || [ ! -f "$APP/$EXEC_NAME" ]; then
+            echo "❌ 打包失败：$APP 缺少可执行文件（CFBundleExecutable='$EXEC_NAME'）"
+            exit 1
+          fi
+
+          mkdir -p Payload
+          echo "Packaging $APP (exec=$EXEC_NAME)"
+          cp -R "$APP" Payload/
+          zip -qry 绘漫岛-unsigned.ipa Payload
+          ls -lh 绘漫岛-unsigned.ipa
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 绘漫岛-unsigned-ipa
+          path: 绘漫岛-unsigned.ipa
+          retention-days: 30

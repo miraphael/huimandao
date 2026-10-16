@@ -1,0 +1,988 @@
+import Foundation
+import UIKit
+import Nuke
+
+/// 章节图片按需加载器 —— 防止整章图片撑爆内存（Jetsam 崩溃）
+/// 加载成功后自动向前预载若干页，阅读更顺滑
+///
+/// ──────────────────────────────────────────────────────────────────────
+/// ⚠️ 设计红线（踩过血坑，勿动）
+///
+/// 本类以前是 `ObservableObject`，`loaded` / `failed` 是 `@Published`，
+/// 却在 `loadRaw()` 的异步回调里直接赋值。`@Published` 会在**写入线程**上
+/// 同步触发 `objectWillChange`，而 `StoreImage` 正在**主线程**读这两个字典
+/// → AttributeGraph 内部状态被并发改写 → **整屏冻结、手势全丢、
+/// 只能强制关机**（用户实测反馈）。
+///
+/// 现在的结构：
+///   · 所有可变状态（loaded/failed/urls/inflight）都由 `NSLock` 保护，
+///     **只在锁内读写**，不含任何 UI 概念。
+///   · 状态变化时**只标记 `needsPublish = true`**，然后统一在主线程
+///     发一次 `objectWillChange`（`publish()`）。
+///   · 视图读的是 `loaded` / `failed` 的**加锁快照**（`snapshot`）。
+///
+/// 另外删掉了旧的「`inflight` 命中就轮询等 30 秒」逻辑：
+/// 那是「图片等几分钟都出不来」的直接原因 —— `runLimited` 会**提前**插入
+/// `inflight` 占坑，而真正执行要排 `AsyncGate` 的队（4 路 × 20s 超时），
+/// 排队时间天然超过 30 秒，于是每个 cell 都在做无意义的死等。
+/// 现在改成「同一个 index 只跑一个 `Task`，其余调用者 `await` 同一个
+/// `Task.value`」——不轮询、不抢坑、天然去重。
+///
+/// ── 第四轮改造（2026-10，借鉴 Aidoku）：下载/缓存换成 Nuke ─────────────
+/// 原来 `loadRaw` 自己走 `HttpFetcher.fetchData` + `ImageDiskCache` +
+/// `DecodedImageCache` + `AsyncGate`。四件套边界太多（并发去重、磁盘 LRU、
+/// 解码、取消传播都要自己写），实测仍有「图片转圈」。
+/// 现在把「网络下载 + 双层缓存 + 去重 + 取消 + 预取」全部交给 Nuke
+/// （`HMDImagePipeline`），本类只保留：
+///   · **解密**（图源规则的 `@js` 头/字节解码，Nuke 不管这个）
+///   · **白边裁剪**（本项目特有）
+///   · `@Published` 安全发布（Nuke 的加载结果回到这里再统一发通知）
+///
+/// ⚠️ 为什么不能直接换成 `NukeUI.LazyImage`：图片需要**先解密再解码**，
+///    Nuke 的 `ImagePipeline` 拿到的是密文字节，得走自定义 `DataDecoder`
+///    或在加载后处理。这里选择「Nuke 负责取字节与缓存，解密在本类做」，
+///    改动面最小且行为可控。
+/// ──────────────────────────────────────────────────────────────────────
+final class ChapterImageStore: ObservableObject {
+
+    // MARK: - 对外只读快照（视图用）
+
+    /// 已加载成功、可直接显示的图片
+    var loaded: [Int: UIImage] {
+        lock.lock(); defer { lock.unlock() }
+        return _loaded
+    }
+
+    /// 加载失败、需要用户手动重试的页
+    var failed: Set<Int> {
+        lock.lock(); defer { lock.unlock() }
+        return _failed
+    }
+
+    /// 当前章节共几页（首屏解析出来的是第一页集合，后续会 append）
+    var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _urls.count
+    }
+
+    /// 单页是否已就绪（视图侧快速判断，避免整字典拷贝）
+    func current(_ index: Int) -> UIImage? {
+        lock.lock(); defer { lock.unlock() }
+        return _loaded[index]
+    }
+
+    /// 单页 URL（调试/分享用）
+    func url(at index: Int) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return _urls.indices.contains(index) ? _urls[index] : nil
+    }
+
+    /// 首屏 URL 列表的只读快照（供"还有没有下一页"之类的判断）
+    var urlsSnapshot: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return _urls
+    }
+
+    /// 第 index 页的**宽高比**（高 / 宽）。图片本身可能已被淘汰，但比例一直留着。
+    ///
+    /// 🔴 **为什么比例必须单独缓存、且永不淘汰** —— 这是「看漫画时图片会割裂、
+    ///    过一会儿才恢复」的直接根因：
+    ///    页面在 SwiftUI 里的高度 = 宽度 × 宽高比。图片一旦被 `evictOutsideWindow`
+    ///    回收（`_loaded` 里没了），旧实现只能退回**写死的 1.45 占位比**，
+    ///    于是那一页的高度**突然变化** → 它下面的所有内容整体位移 → 视觉上就是
+    ///    「裂开、跳一下」，等图片重新加载完才收敛回真实高度。
+    ///    比例只是几个浮点数，留着它的成本可以忽略，收益是**布局彻底稳定**。
+    func ratio(at index: Int) -> CGFloat? {
+        lock.lock(); defer { lock.unlock() }
+        return _ratios[index]
+    }
+
+    /// 本章**已知比例的样本数**（用于判断估算是否可信）
+    var ratioSampleCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _ratios.count
+    }
+
+    /// 本章已知比例的**中位数**（样本不足 3 个时返回 nil）。
+    ///
+    /// 用途：给「还没加载过」的页一个比写死 1.45 准得多的估算 ——
+    /// 同一章、同一站点的漫画页比例通常高度一致，用中位数估算后
+    /// 首次加载时的高度跳变会小一个数量级。
+    var medianRatio: CGFloat? {
+        lock.lock()
+        // ⚠️ 必须按 `_urls.count` 过滤：持久化读回来的比例里可能有**超出当前页数**
+        //    的索引（章节页数变少 / 键碰撞串进来的别章数据）。它们对 `heights`
+        //    无害（那里按 count 迭代），但**中位数是全量取样本**，掺进来会把
+        //    「未加载页的估算高度」带偏 → 又变成高度突变。
+        //    （第二轮复核智能体发现：我先前那句「越界项根本不会被读到」只对 heights 成立。）
+        let vals = _ratios.filter { $0.key < _urls.count }.map(\.value)
+        lock.unlock()
+        guard vals.count >= 3 else { return nil }
+        let sorted = vals.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    /// **一次**取回「算每页高度」所需的全部信息（只加一次锁）。
+    ///
+    /// ⚠️ 为什么需要它：滚动模式的内容视图与协调器都要按页算高度
+    /// （`宽 × 宽高比`），长章 300 页。若逐页调 `ratio(at:)`，每次都要加锁
+    /// —— 一帧就是几百次锁操作，白白拖慢布局。这里一次拿完。
+    func ratioSnapshot() -> (known: [Int: CGFloat], median: CGFloat?, count: Int) {
+        lock.lock(); defer { lock.unlock() }
+        var med: CGFloat? = nil
+        // ⚠️ 中位数只统计**当前确实存在的页**（理由见 `medianRatio`）。
+        //    `known` 仍然返回全量：`StripMetrics.heights` 按 `count` 迭代，
+        //    取不到的索引不会读到，而取得到的（分页章后半段）正是我们要救的。
+        let inRange = _ratios.filter { $0.key < _urls.count }.map(\.value)
+        if inRange.count >= 3 {
+            let sorted = inRange.sorted()
+            med = sorted[sorted.count / 2]
+        }
+        return (_ratios, med, _urls.count)
+    }
+
+    // MARK: - 内部状态（全部由 lock 保护）
+
+    private let lock = NSLock()
+    private var _loaded: [Int: UIImage] = [:]
+    /// 每页图片的**宽高比**（高 / 宽）。
+    /// ⚠️ **永不淘汰**（`evictOutsideWindow` 不碰它）—— 理由见 `ratio(at:)` 的说明。
+    private var _ratios: [Int: CGFloat] = [:]
+    private var _failed: Set<Int> = []
+    private var _urls: [String]
+    /// 每个 index 对应的在飞任务。用 Task 而不是 Bool 标记：
+    /// 后来者直接 await 同一个 Task，不再轮询等待。
+    private var inflight: [Int: Task<UIImage?, Never>] = [:]
+    /// 是否有未发布的状态变化（攒批，避免高频发通知）
+    private var needsPublish = false
+    /// 最近若干次成功请求的耗时（秒）。用来判断链路是不是「慢链路」，
+    /// 进而动态收敛预载窗口 —— 慢链路上继续猛预载只会让队列更长。
+    private var recentRTT: [Double] = []
+
+    /// 当前有效的预载窗口：慢链路时自动收窄。
+    /// 判据用「最近 slowWindow 次的**中位数**」而不是平均值 ——
+    /// 单张图偶发抖动不该影响整体策略。
+    private var effectiveAhead: Int {
+        lock.lock()
+        let rtts = recentRTT
+        lock.unlock()
+        guard rtts.count >= Self.slowWindow else { return Self.preloadAhead }
+        let sorted = rtts.sorted()
+        let median = sorted[sorted.count / 2]
+        if median > Self.slowRTT { return 2 }        // 慢：只预载 2 张，先把当前页稳住
+        if median > Self.slowRTT / 2 { return 4 }
+        return Self.preloadAhead
+    }
+
+    /// 记录一次成功请求的耗时（由 `loadRaw` 调用）
+    private func noteRTT(_ seconds: Double) {
+        lock.lock()
+        recentRTT.append(seconds)
+        if recentRTT.count > Self.slowWindow * 2 { recentRTT.removeFirst() }
+        lock.unlock()
+    }
+
+    private let referer: String
+    private let ua: String
+    /// 规则尾部 @Header:{...} 带来的额外请求头（很多图片站校验 Referer，不带就 403）
+    private let extraHeaders: [String: String]
+    private let whiteCut: Bool
+    /// 图源 origin（BOOK_SOURCE_URL）—— 用来取 `RULE_BOOK_CONTENT_DECODER`
+    private let origin: String
+    /// ── 离线模式 ────────────────────────────────────────────────────────
+    /// 非空表示这一章是**已下载**的：`_urls` 里存的是**本地文件路径**，
+    /// 加载走 `Data(contentsOf:)`，完全不经网络、不进并发闸门。
+    /// 见 `OfflineLibrary` 的注释（用户反馈「下载完打开还要加载」）。
+    private let localFiles: [URL]
+
+    /// 比例持久化的键（章节身份）。nil = 不持久化（读缓存/ Debug 打开）。
+    ///
+    /// 🔴 **为什么要持久化比例**（2026-10-13 真机日志实锤）：
+    ///    用户反馈「重新打开漫画就往上滑」「打开时自动滑一下」。
+    ///    插桩显示：打开瞬间 `内容总高 90354`（166 页 × 375 × **1.45 占位比**），
+    ///    等真实图片到达后 `内容总高 47880` —— **腰斩 47%**。
+    ///    高度表突变 → 触发高度补偿 → 若补偿被跳过（「超过 3 页」护栏），
+    ///    内容就会在用户眼前整体上移 = 「自动往上滑」+「黑屏」。
+    ///    把比例存到 UserDefaults 后，**重开时首帧就是正确高度**，突变不再发生。
+    private let persistKey: String?
+
+    /// 本章是否离线（供 UI 打角标 / 决定要不要后台续抓分页）
+    var isOffline: Bool { !localFiles.isEmpty }
+
+    // MARK: - 比例持久化
+
+    /// UserDefaults 里的键前缀。整体清 App 数据时会跟着没了，无所谓（比例可再生）。
+    private static let ratioPrefix = "hmd.imageratio.v1."
+
+    /// 把磁盘上存的这一章比例读进 `_ratios`（init 时调用）。
+    private func loadPersistedRatios() {
+        guard let key = persistKey else { return }
+        let d = UserDefaults.standard.dictionary(forKey: Self.ratioPrefix + key) as? [String: Double] ?? [:]
+        guard !d.isEmpty else { return }
+        lock.lock()
+        for (k, v) in d {
+            // 🔴 这里**不能**加 `idx < _urls.count` 过滤 —— init 时 `_urls` 只有
+            //    **首屏第一批**（`contentFirstPage` 只返回第一分页），后续分页是
+            //    `appendURLs` 事后才到达的。加了那个过滤，分页章**后半章的比例
+            //    永远读不回来**，重开时那些页仍走占位比 → 真实图到达时章后段
+            //    再次腰斩 = 用户说的「尾部自动往上滑」。
+            //    （由 3 个智能体独立发现：链路 2 / 3 / 8。）
+            //
+            //    多余的索引对 `heights` 是**安全**的：`StripMetrics.heights` 只按
+            //    `snap.count`（= `_urls.count`）迭代，越界项读不到。
+            //    ⚠️ 但**中位数**是全量取样本，必须单独过滤 —— 见 `medianRatio` /
+            //    `ratioSnapshot`。（第二轮复核智能体发现：别以为「没人读」就万事大吉。）
+            if let idx = Int(k), v > 0, v < Self.ratioBound, _ratios[idx] == nil, idx >= 0 {
+                _ratios[idx] = CGFloat(v)
+            }
+        }
+        lock.unlock()
+    }
+
+    /// 立刻把当前已知比例写盘。
+    ///
+    /// ⚠️ **过滤口径必须和 `loadPersistedRatios` 完全一致** —— 之前读侧写死
+    ///    `v < 20` 而写侧不过滤，长条漫（整章一张超长图，比例可达 30+）的比例
+    ///    写得进去却读不回来，每开一次都要重学一遍。（智能体审查发现）
+    private func persistRatiosNow() {
+        guard let key = persistKey else { return }
+        lock.lock()
+        var out: [String: Double] = [:]
+        out.reserveCapacity(_ratios.count)
+        for (i, r) in _ratios where r > 0 && r < Self.ratioBound { out[String(i)] = Double(r) }
+        lock.unlock()
+        UserDefaults.standard.set(out, forKey: Self.ratioPrefix + key)
+        trimRatioStoreIfNeeded()
+    }
+
+    /// 限制比例缓存的**章节数上限**（LRU 淘汰最旧的）。
+    ///
+    /// 🔴 原来只写不删：按章累积、永不清理（移出书架 / 删下载都不清）。
+    ///    1000 章大约 1MB+，而且 `UserDefaults` 每次 `set` 都会**整份 plist 重写**，
+    ///    数据量线性增长 → 启动与写入越来越慢。（由智能体「漫读」「设置」分别发现）
+    ///    这里用一个轻量的「最近写入时间表」做 LRU，超过上限就删最旧那批。
+    private func trimRatioStoreIfNeeded() {
+        let d = UserDefaults.standard
+        var order = d.dictionary(forKey: Self.ratioOrderKey) as? [String: Double] ?? [:]
+        guard let key = persistKey else { return }
+        order[key] = Date().timeIntervalSince1970
+        if order.count > Self.ratioChapterLimit {
+            // 按时间升序，删掉最旧的一批（留出 10% 余量，避免每次写都触发淘汰）
+            let sorted = order.sorted { $0.value < $1.value }
+            let drop = order.count - Self.ratioChapterLimit + Self.ratioChapterLimit / 10
+            for (k, _) in sorted.prefix(drop) {
+                d.removeObject(forKey: Self.ratioPrefix + k)
+                order.removeValue(forKey: k)
+            }
+        }
+        d.set(order, forKey: Self.ratioOrderKey)
+    }
+
+    /// 比例合法区间上界。两侧（读/写）共用，避免口径漂移。
+    private static let ratioBound: CGFloat = 50
+    /// 最多缓存多少章的图片比例（超出按 LRU 淘汰最旧的）。
+    private static let ratioChapterLimit = 300
+    /// 记录每章比例最近写入时间的键（用于 LRU）。
+    private static let ratioOrderKey = "hmd.imageratio.order.v1"
+
+    /// 标记比例需要落盘（防抖：≥1.5 秒才真正写，避免滚动时每帧都写）。
+    ///
+    /// ⚠️ `setLoaded` 可能在**非主线程**的 Nuke 回调里执行，所以这里用**独立的锁**
+    ///    保护 `ratioSaveWork` —— 否则两个线程同时 cancel/替换会让待写任务被丢掉
+    ///    （表现为「比例没存上」）。`lock`（状态锁）不能在这里用：`persistRatiosNow`
+    ///    自己要拿它，会重入死锁。
+    private func schedulePersistRatios() {
+        guard persistKey != nil else { return }
+        let w = DispatchWorkItem { [weak self] in self?.persistRatiosNow() }
+        saveLock.lock()
+        ratioSaveWork?.cancel()
+        ratioSaveWork = w
+        saveLock.unlock()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
+    }
+
+    /// 保护 `ratioSaveWork` 的小锁（**不能**用状态锁 `lock`，见 `schedulePersistRatios`）。
+    private let saveLock = NSLock()
+    private var ratioSaveWork: DispatchWorkItem?
+
+    /// 预载窗口：进入章节先并发拉前 6 张（回到 6）。
+    /// ⚠️ 曾改成 12，结果反而更慢：滚动模式里 LazyVStack 每出现一个新 cell 就会
+    /// 调 `image(at:)`，叠加 12 张预载 → 同时 20+ 个请求打图站 → 图站限流/超时，
+    /// 用户看到的就是「图片划水经常转圈」。**预载窗口不能大于并发闸门**。
+    static let preloadAhead = 6
+    /// ⚠️ 22 秒（从 16 上调）：实测（2026-10，包子漫画 c-nd3-1.6wm.top）
+    /// 走代理时单张 webp 要 **7.7~12.7 秒**（直连只要 1.7~3.7 秒）。
+    /// 16 秒在高延迟链路上会**正常图也判超时 → 走重试 → 更慢**，
+    /// 用户看到「明明能出图却一直在转圈」。22 秒能覆盖代理慢链路，
+    /// 又不至于让用户以为卡死。
+    private static let imageTimeout: TimeInterval = 22
+    /// 单张图的总耗时预算（含重试）。超了就当失败，交给用户点重试，
+    /// 绝不无限期挂着 —— 这是「等几分钟出不来」的兜底。
+    private static let imageBudget: TimeInterval = 45
+    /// 并发上限：**Nuke 接管下载后可以放宽到 6**。
+    ///
+    /// ── 为什么从 4 提到 6 ───────────────────────────────────────────────
+    /// 以前是 4，因为「四件套」时代没有请求去重：
+    /// 滚动模式里 LazyVStack 每出现一个新 cell 就调 `image(at:)`，
+    /// 叠加预载会同时打出 20+ 个请求，图站直接限流。
+    ///
+    /// 现在 Nuke 的 `DataLoader` 内建：① 同 URL 并发**去重**；
+    /// ② **取消传播**（cell 回收后立即放弃在飞请求）；
+    /// ③ HTTP/2 多路复用。真正打出去的并发数已由 Nuke 统一调度，
+    /// 这里再压到 4 只是白白拖长首屏（用户实测「等几分钟」）。
+    /// 提到 6 是速度与礼貌的折中：爬虫礼仪上 6 路对图站仍算温和。
+    ///
+    /// ⚠️ 但**预载窗口不能跟着放大**：预载是「主动提前打」的请求，
+    /// 和可视区内的即时请求叠加。保持 `preloadAhead = 6`。
+    private static let maxConcurrent = 6
+    /// 慢链路自适应：若最近几次请求明显偏慢，暂时把预载收敛，
+    /// 避免「越慢越排队、越排队越慢」。阈值取实测代理态中位数（约 8s）。
+    private static let slowRTT: TimeInterval = 6.5
+    private static let slowWindow = 4
+
+    /// ── 全局闸门：所有图片请求（即时加载 + 预载）共用同一个并发额度 ──
+    /// 这是「图片经常转圈」的根治：此前 `image(at:)` 直调 `loadRaw`，
+    /// 而 `runLimited` 只约束预载任务，两路各开各的 Task，合计并发不可控。
+    private static let gate = AsyncGate(limit: maxConcurrent)
+
+    init(urls: [String], referer: String, ua: String, whiteCut: Bool,
+         headers: [String: String] = [:], origin: String = "",
+         persistKey: String? = nil) {
+        self._urls = urls
+        self.referer = referer
+        self.ua = ua
+        self.whiteCut = whiteCut
+        self.extraHeaders = headers
+        self.origin = origin
+        self.localFiles = []
+        self.persistKey = persistKey
+        loadPersistedRatios()
+    }
+
+    /// 离线初始化：直接读磁盘上的已下载图片，零网络、零解析。
+    ///
+    /// ⚠️ 这条路径的存在本身就是修复 —— 以前下载完的章节没有任何读取入口，
+    ///    阅读器一律联网重抓，用户看到「我明明下载了还要加载」。
+    init(localFiles: [URL], whiteCut: Bool, origin: String = "", persistKey: String? = nil) {
+        self._urls = localFiles.map { $0.path }
+        self.referer = ""
+        self.ua = ""
+        self.whiteCut = whiteCut
+        self.extraHeaders = [:]
+        self.origin = origin
+        self.localFiles = localFiles
+        self.persistKey = persistKey
+        loadPersistedRatios()
+    }
+
+    // MARK: - 状态发布（唯一允许碰 UI 的地方）
+
+    /// 把一个变更标记为「待发布」。可以在任意线程调用。
+    private func markDirty() {
+        lock.lock()
+        needsPublish = true
+        lock.unlock()
+        // 直接派到主线程发通知：objectWillChange 必须在主线程触发，
+        // 否则 SwiftUI 的图状态会被后台线程改写（→ 整屏卡死）。
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let should = self.needsPublish
+            self.needsPublish = false
+            self.lock.unlock()
+            if should { self.objectWillChange.send() }
+        }
+    }
+
+    // MARK: - 写入状态的统一收口（全部在锁内，且改完 markDirty）
+
+    private func setLoaded(_ index: Int, _ image: UIImage) {
+        lock.lock()
+        _loaded[index] = image
+        _failed.remove(index)
+        // 记下真实宽高比（**永不淘汰**）—— 布局靠它才算得准，见 `ratio(at:)`
+        let w = image.size.width
+        var isNewRatio = false
+        if w > 0 {
+            let r = image.size.height / w
+            if _ratios[index] != r {
+                _ratios[index] = r
+                isNewRatio = true
+            }
+        }
+        lock.unlock()
+        // 🔎 插桩：用户报「图片是黑的」时，这条能直接区分三种情况：
+        //    ① 根本没打这条 → 图片没加载（网络/URL 问题）
+        //    ② size=0×0 → 数据解码出来是空图（响应被丢 / 内容不是图）
+        //    ③ size 正常但仍显示黑 → 渲染层问题（与解析/网络无关）
+        //    （由真机日志只能看到「淘汰 N 页」推断不出加载结果，补这条）
+        if index < 3 || isNewRatio {
+            DiagLog.event("img", "load",
+                          "页 \(index) 载入 \(Int(w))×\(Int(image.size.height)) 比例 \(String(format: "%.3f", Double(image.size.height / max(w, 1))))"
+                          + (w > 0 ? "" : " ⚠️ 空图（解码失败或响应为空）"))
+        }
+        // 只对「新学到的比例」落盘 —— 防抖 1.5 秒，滚动时不会每帧都写
+        if isNewRatio { schedulePersistRatios() }
+        markDirty()
+    }
+
+    /// 立刻把比例写盘（阅读器退出 / App 进后台时调用，别指望防抖一定来得及）。
+    func flushRatios() {
+        // 顺手取消挂起的防抖任务：旧 store 被换掉后它还会在 1.5s 后补写一次
+        //（写的是旧章自己的 key，无害但多余）。（智能体审查发现）
+        saveLock.lock()
+        ratioSaveWork?.cancel()
+        ratioSaveWork = nil
+        saveLock.unlock()
+        persistRatiosNow()
+    }
+
+    private func setFailed(_ index: Int) {
+        lock.lock()
+        _failed.insert(index)
+        lock.unlock()
+        // 🔎 插桩：**「黑屏图片」的头号嫌疑就是这条** —— 加载失败时页面会显示
+        //    失败态（黑底 + 重试按钮），用户看到的就是「一堆黑屏图片」。
+        //    打出 URL（去掉 query 里的 token，避免泄露）便于判断是
+        //    「URL 本身坏」还是「被恒拒绝清单拦了」。
+        if index < 8 {
+            let u = _urls.indices.contains(index) ? _urls[index] : ""
+            let bare = String(u.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+            let denied = JsoupConn.isDeniedAlways(u) ? " ⚠️命中恒拒绝清单" : ""
+            DiagLog.event("img", "fail", "页 \(index) 加载失败 \(bare)\(denied)")
+        }
+        markDirty()
+    }
+
+    // MARK: - 增量追加 URL（首屏只拿第一页 → 后台续抓分页）
+
+    /// 必须在主线程调用（`_urls` 被 SwiftUI 读，且会触发一次发布）
+    @MainActor
+    func appendURLs(_ more: [String]) {
+        lock.lock()
+        let existing = Set(_urls)
+        let add = more.filter { !existing.contains($0) }
+        guard !add.isEmpty else { lock.unlock(); return }
+        _urls.append(contentsOf: add)
+        let start = _urls.count - add.count
+        let total = _urls.count
+        lock.unlock()
+        markDirty()
+        // 立刻预载新追加的这一段，用户往下滚就不会转圈（慢链路会自动收窄）
+        let end = min(total - 1, start + effectiveAhead)
+        if start <= end { runLimited(Array(start...end)) }
+    }
+
+    // MARK: - 对外入口
+
+    /// 取第 index 页。缓存命中直接返回；否则复用/新建加载任务并 await 它。
+    ///
+    /// 语义变化：以前「已有任务在飞」会进入 30 秒轮询（死等）；
+    /// 现在直接 `await` 那个 Task 的 value —— 一次等待，绝不空转。
+    ///
+    /// ⚠️ 清理语义：任务由 `self` 持有（`inflight[index]`），**不是**调用者的
+    /// 结构化子任务。因此这里用 `defer` 而不是「await 完再清理」——
+    /// 调用者（SwiftUI 的 `.task`）在 cell 被回收时会取消，`await task.value`
+    /// 会提前返回，但后台任务必须继续跑完并把 `inflight` 清掉，
+    /// 否则该 index 会被永久标记为「在飞」，后续所有请求都拿到一个已取消的任务。
+    @discardableResult
+    func image(at index: Int) async -> UIImage? {
+        // ⚠️ 所有锁操作必须放在**同步**函数里：`NSLock.lock()` 标了
+        //    `@available(*, noasync)`，在 async 函数体内直接调用会告警
+        //    （Swift 6 语言模式下直接报错）。这里把「查缓存 / 摘取在飞任务 /
+        //    占坑建任务」整体收进一个同步方法，异步侧只拿结果。
+        switch claim(index) {
+        case .cached(let img):
+            return img
+        case .failed:
+            return nil
+        case .flying(let task):
+            return await task.value            // ← 复用同一个任务，不再轮询
+        case .owner(let task):
+            let img = await task.value
+            // 🔴 **不要在这里 prefetchAhead**（2026-10-16 真机实锤的回归根因）：
+            //    `runLimited` 自己就是走 `image(at:)` 起任务的，于是
+            //      加载第 N 张成功 → prefetchAhead(N+1 … N+6) → runLimited → image(at:)
+            //      → 又成功 → 再 prefetchAhead … **无限前向级联**，
+            //    进章节时 7 张种子会在十几秒内把整章（几十上百张）全部拉完。
+            //    后果真机日志看得一清二楚：
+            //      · `[load] img 页 3 / 页 1 / 页 6 …` 页序混乱、持续 12 秒不断
+            //      · 每张到家就把该页高度从兜底值改成真实值 → contentSize 持续收缩
+            //        → 用户看到「图片一直往上顶」「自己在一直往下滑」
+            //      · 首屏第一张图要跟 38 张抢带宽 → 黑屏 1.5 秒
+            //    预载**只应由视口锚点驱动**：`ReaderView` 在「进章节 / 翻页 / 滚动」
+            //    时都会调 `preload(around:)`（且 `preloadCenter` 已去重），
+            //    这里再补一次纯属重复，且把窗口预载变成了整章预载。
+            return img
+        }
+    }
+
+    /// `image(at:)` 的同步前半段：决定这一页该「直接返回」「复用任务」还是「新建任务」。
+    private enum Claim {
+        case cached(UIImage)
+        case failed
+        case flying(Task<UIImage?, Never>)
+        case owner(Task<UIImage?, Never>)
+    }
+
+    private func claim(_ index: Int) -> Claim {
+        lock.lock()
+        defer { lock.unlock() }
+        guard _urls.indices.contains(index) else { return .failed }
+        if let img = _loaded[index] { return .cached(img) }
+        if _failed.contains(index) { return .failed }   // 失败态等用户点重试
+        if let flying = inflight[index] { return .flying(flying) }
+
+        // 占坑：先建 Task（此时还没进闸门），保证并发调用只产生一个任务
+        let task = Task<UIImage?, Never> { [weak self] in
+            guard let self else { return nil }
+            defer { self.clearInflight(index) }   // ⚠️ 任务自己负责摘牌
+            return await self.loadNow(index)
+        }
+        inflight[index] = task
+        return .owner(task)
+    }
+
+    /// 摘掉在飞标记（由任务体自己调用，保证无论调用者是否取消都能清理）
+    private func clearInflight(_ index: Int) {
+        lock.lock()
+        inflight[index] = nil
+        lock.unlock()
+    }
+
+    /// 真正走一遍「缓存 → 闸门 → 下载」。任务本身由 `image(at:)` 创建，
+    /// 这里只管干活，不碰 `inflight`。
+    private func loadNow(_ index: Int) async -> UIImage? {
+        guard urlAt(index) != nil else { return nil }
+
+        // ⓪ **离线章节**：直接读磁盘。放在最前面且**不进闸门** ——
+        //    闸门是给网络请求限流的，本地文件读取被它卡住毫无道理
+        //    （用户反馈「下载完打开还要加载」，一部分原因就是本地读也被排队）。
+        if let f = localFileAt(index) { return await loadLocalFile(index, path: f.path) }
+
+        // ① 缓存预检（**必须在闸门之外**）：命中的图是纯本地 IO + 解码，
+        //    几十毫秒的事，不该被并发额度卡住排队。
+        // ── 缓存预检 ──────────────────────────────────────────────────────
+        // ⚠️ 只查**内存图片缓存**（`ImageCaching`），不碰磁盘数据缓存。
+        //
+        //    为什么不去查磁盘：`DataCaching.containsData(for:)` 是对管线内部
+        //    `DataCache` 的直接调用，签名随 Nuke 小版本变动，而且 Aidoku 全程
+        //    没有这样用过 —— 它一律交给 `ImagePipeline` 自己判断命中。
+        //
+        //    但本类的流程特殊：我们要区分「原始**密文**字节在不在磁盘上」，
+        //    再决定走不走解密。所幸路径②（`loadRaw` → `data(for:)`）本身
+        //    就是「先查双层缓存，未命中才发网络」，Nuke 命中磁盘时同样是
+        //    零网络返回。所以这里**不需要自己预检磁盘**：
+        //      · 内存图命中 → 直接返回已解码的图（最快路径）
+        //      · 其余情况 → 一律走闸门 → `loadRaw`，由 Nuke 内部决定是
+        //        命中磁盘（快）还是真的发网络（慢）
+        //
+        //    这样既拿回了「内存命中零成本」的收益，又不依赖易变的磁盘 API，
+        //    也彻底消除了「请求头不一致导致查不到缓存」这类隐患。
+        if let img = memoryHit(index) { return img }
+
+        // ② 走闸门（带超时兜底）。Nuke 在 `loadRaw` 内部完成缓存判定。
+        return await Self.gate.run { await self.loadRaw(index) }
+    }
+
+    /// 离线模式下取第 index 页对应的本地文件（同步，锁内）
+    private func localFileAt(_ index: Int) -> URL? {
+        guard !localFiles.isEmpty else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        return _urls.indices.contains(index) && localFiles.indices.contains(index)
+            ? localFiles[index] : nil
+    }
+
+    /// 离线读图：`Data(contentsOf:)` → `UIImage` → 白边裁剪。
+    private func loadLocalFile(_ index: Int, path: String) async -> UIImage? {
+        if Task.isCancelled { return nil }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)), !data.isEmpty else {
+            setFailed(index)
+            return nil
+        }
+        var bytes = data
+        if UIImage(data: bytes) == nil {
+            // 旧版本下载时写的是**未解密**的原始字节 → 补跑一次内容解码器。
+            // （新版本下载已在写盘前解码，所以正常情况下走不到这里。）
+            bytes = await Self.decodeBytes(bytes, origin: origin, baseUrl: path, headers: [:])
+        }
+        guard var img = UIImage(data: bytes) else {
+            setFailed(index)
+            return nil
+        }
+        if whiteCut { img = WhiteEdgeCutter.cut(img) }
+        setLoaded(index, img)
+        return img
+    }
+
+    /// ── 内容解码器（`RULE_BOOK_CONTENT_DECODER`）的唯一实现 ──────────────
+    ///
+    /// 它作用于**下载下来的图片字节**，不是 URL 规则。语义见安卓
+    /// `ChapterBrowseAdapter.m25054while`：`setContent(headers, byte[], url)`
+    /// → `result` 是 byte[] → `getBytes(decoder, false)` 返回处理后的 byte[]。
+    ///
+    /// ⚠️ 下载（`DownloadManager`）与离线读取（本类）都必须用它，
+    ///    否则磁盘上会是「一半解密一半没解密」，离线打开直接白屏。
+    static func decodeBytes(_ data: Data, origin: String, baseUrl: String,
+                            headers: [String: String]) async -> Data {
+        guard !origin.isEmpty,
+              let s = ComicRepository.shared.source(url: origin),
+              let rule = s.ruleBookContentDecoder, !rule.isEmpty else { return data }
+        let a = AnalyzeRule(baseUrl: baseUrl)
+        if let decoded = await a.applyContentDecoder(rule, bytes: data, headers: headers), !decoded.isEmpty {
+            return decoded
+        }
+        return data
+    }
+
+    /// 内存图片缓存预检：命中时直接返回已解码的 `UIImage`（零网络、零解码）。
+    ///
+    /// 用 Aidoku 同款 API（`ImageCaching`）：`containsCachedImage(for:)` + `cachedImage(for:)`。
+    /// ⚠️ 不能用 `containsData(for:)` / `storeData(...)` —— 那是 `DataCaching`
+    ///    （磁盘字节缓存）的接口，不是内存图片缓存的。
+    ///
+    /// ⚠️ `ImageContainer.image` 在 iOS 上是 **非可选** 的 `PlatformImage`
+    ///    （= `UIImage`），不能写 `let image = container.image` 做条件绑定 ——
+    ///    编译器会报 "initializer for conditional binding must have Optional type"。
+    private func memoryHit(_ index: Int) -> UIImage? {
+        guard let urlString = urlAt(index) else { return nil }
+        var hh: [String: String] = ["Referer": referer, "User-Agent": ua]
+        for (k, v) in extraHeaders { hh[k] = v }
+        guard let req = HMDImagePipeline.request(url: urlString, referer: referer, ua: ua, headers: hh),
+              HMDImagePipeline.shared.cache.containsCachedImage(for: req),
+              let container = HMDImagePipeline.shared.cache.cachedImage(for: req)
+        else { return nil }
+        let image = container.image
+        // 内存命中也算「已加载」，写进本类状态让视图立即显示
+        setLoaded(index, image)
+        return image
+    }
+
+    /// 在锁内安全取某一页的 URL
+    private func urlAt(_ index: Int) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard _urls.indices.contains(index) else { return nil }
+        return _urls[index]
+    }
+
+    /// `loadRaw` 的同步前半段：校验 index、命中已加载的图、取 URL。
+    /// 把锁操作留在同步函数里，避免 async 上下文调用 `NSLock`。
+    private enum RawTarget {
+        case ready(UIImage)     // 已加载，直接返回
+        case url(String)        // 待下载
+    }
+
+    private func rawTarget(_ index: Int) -> RawTarget? {
+        lock.lock(); defer { lock.unlock() }
+        guard _urls.indices.contains(index) else { return nil }
+        if let img = _loaded[index] { return .ready(img) }
+        return .url(_urls[index])
+    }
+
+    /// 实际抓取+解码（带重试），预载与即时加载共用。
+    /// 只在 `AsyncGate` 额度内执行，绝不自建并发。
+    ///
+    /// ── 第四轮改造：数据获取交给 Nuke ──────────────────────────────────
+    /// 原来自己走 `HttpFetcher.fetchData` + `ImageDiskCache`。现在改为
+    /// `HMDImagePipeline.shared.data(for:)`：
+    ///   · Nuke 自动做**请求去重**（同 URL 并发只发一次）
+    ///   · 自动**双层缓存**（内存 100MB + 磁盘 500MB，按 LRU）
+    ///   · 返回的是**原始字节**（`.storeOriginalData`），解密仍在本类做
+    /// ⚠️ 超时交给 Nuke 的 DataLoader（30s/60s），不再自己算 budget；
+    ///    但保留一次重试（图站偶发 5xx/Cloudflare 挑战）。
+    private func loadRaw(_ index: Int) async -> UIImage? {
+        let url: String
+        switch rawTarget(index) {
+        case .none: return nil
+        case .ready(let img): return img
+        case .url(let u): url = u
+        }
+        // 规则自带的头优先，其次才是默认 Referer/UA
+        var hh: [String: String] = ["Referer": referer, "User-Agent": ua]
+        for (k, v) in extraHeaders { hh[k] = v }
+
+        guard let req = HMDImagePipeline.request(url: url, referer: referer, ua: ua, headers: hh) else {
+            setFailed(index)
+            return nil
+        }
+
+        var attempt = 0
+        while attempt < 2 {
+            attempt += 1
+            // ⚠️ 必须区分「失败」与「被取消」（血坑）：
+            // 滚动模式下 cell 回收 → SwiftUI 取消 `.task` → 这里的 `data(for:)` 抛 CancellationError。
+            // 旧代码用 `try?` 把两种情况都吞成 nil，于是：
+            //   ① 取消后还傻等 500ms 再重试（浪费额度、拖慢真正可见的图）；
+            //   ② 循环走完调 `setFailed(index)`，把这一页标成**永久失败** —— 
+            //      用户滚回去看到的是「点击重试」而不是自动加载，只能手动点。
+            // 现在取消就直接返回 nil（不标失败），下次进入可视区会重新发起。
+            if Task.isCancelled { return nil }
+            let tReq = Date()
+            let data: Data?
+            do {
+                // ⚠️ `ImagePipeline.data(for:)` 返回的是**元组**
+                //    `(Data, URLResponse?)`，不是 `Data`！写 `d.isEmpty` 会报
+                //    "value of tuple type has no member 'isEmpty'"，写
+                //    `data = d` 会报 "cannot assign '(Data, URLResponse?)' to 'Data?'"。
+                let (d, _) = try await HMDImagePipeline.shared.data(for: req)
+                data = d.isEmpty ? nil : d
+            } catch let err as ImagePipeline.Error {
+                // ⚠️ Nuke 抛的是 `ImagePipeline.Error`（枚举），**不是** `CancellationError`。
+                //    以前的 `catch is CancellationError` 永远不匹配
+                //    （编译器 warning: cast ... always fails），
+                //    结果「用户滚动导致的取消」会被当成「真实失败」→ 页面被标 failed。
+                //    枚举里的 `.cancelled` 才是取消信号（见 Aidoku 的 switch 写法）。
+                if case .cancelled = err { return nil }
+                data = nil                     // 真正的网络/解码失败
+            } catch {
+                if Task.isCancelled { return nil }
+                data = nil
+            }
+            guard let data else {
+                // 超时/网络抖动 → 短暂退避再来（但取消优先，别做无谓等待）
+                if Task.isCancelled { return nil }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                continue
+            }
+            // 记录成功请求的耗时，供「慢链路自适应」判断是否收敛预载
+            noteRTT(Date().timeIntervalSince(tReq))
+
+            // ── 正文后期规则：图片本身是加密的 → 用 RULE_BOOK_CONTENT_DECODER 解出来 ──
+            // 对照安卓 ChapterBrowseAdapter.m25054while()：拿到 bytes 后跑解码器规则。
+            // ⚠️ 与离线路径共用同一个实现（`decodeBytes`），保证「下载到磁盘的」
+            //    和「在线阅读的」是同一份字节，不会出现离线打不开。
+            let bytes = await Self.decodeBytes(data, origin: origin, baseUrl: url, headers: hh)
+            if var img = UIImage(data: bytes) {
+                // 白边裁剪要在**回写缓存之前**做完：
+                // 缓存里存的应该是**用户最终看到的那张图**。先存后裁的话，
+                // 下次内存命中拿到的是未裁剪的图，裁剪设置变了还会不一致。
+                if whiteCut { img = WhiteEdgeCutter.cut(img) }
+
+                // 把**已解码（且已裁剪）的图像**写进内存缓存，下次命中零解码直接显示。
+                // ⚠️ 用 `storeCachedImage(_:for:)`（`ImageCaching`，内存图片缓存），
+                //    不是 `storeData(_:for:cacheType:)`（`DataCaching`，磁盘字节缓存）。
+                //    这里存 `ImageContainer(image:)`，与 Aidoku 的用法一致
+                //    （见 `ReaderPageView.setPageImage` 末尾那行）。
+                //
+                //    为什么不把「解密后的字节」写回磁盘数据缓存：
+                //    磁盘缓存的写入在管线内部完成，直接调用 `DataCaching` 的
+                //    方法签名随版本变动，且解密后写回会让「磁盘上是密文还是明文」
+                //    变得不确定，排查困难。内存缓存这一层已经吃掉了阅读中
+                //    「同一页滚出再滚回」的绝大多数重复解码，收益足够。
+                HMDImagePipeline.shared.cache.storeCachedImage(ImageContainer(image: img), for: req)
+
+                setLoaded(index, img)
+                return img
+            }
+            if Task.isCancelled { return nil }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        // 走到这里是真的两次都失败了。若这期间任务被取消，不要标失败。
+        if Task.isCancelled { return nil }
+        setFailed(index)
+        return nil
+    }
+
+    /// 用户点击重试
+    func retry(_ index: Int) {
+        lock.lock()
+        _failed.remove(index)
+        _loaded[index] = nil
+        let flying = inflight[index] != nil
+        lock.unlock()
+        markDirty()
+        guard !flying else { return }
+        Task { _ = await image(at: index) }
+    }
+
+    // MARK: - 预载
+
+    /// ⚠️ 已废弃（2026-10-16）：`prefetchAhead(from:)` 已删除。
+    ///     它曾被 `image(at:)` 在**每张图加载成功后**调用，而 `runLimited` 又是走
+    ///     `image(at:)` 起任务的 → 形成无限前向级联，把整章图片全部拉完
+    ///     （详见 `image(at:)` 里那段注释）。预载只应由视口锚点驱动。
+
+    /// 进入章节 / 翻页时预载：当前页往后 preloadAhead 张
+    func preload(around index: Int) {
+        // ⚠️ **先淘汰窗口外的已解码图**（内存治理，见 `evictOutsideWindow`）。
+        //    这一步不能省：`_loaded` 原先只增不减，长章会把整章 UIImage 常驻 → Jetsam。
+        evictOutsideWindow(center: index)
+        let start = max(0, index)
+        let ahead = effectiveAhead
+        lock.lock()
+        let end = min(_urls.count - 1, index + ahead)
+        lock.unlock()
+        guard start <= end else { return }
+        runLimited(Array(start...end))
+    }
+
+    /// 内存窗口：保留「当前页 −back ～ 当前页 +ahead」的**已解码**图，其余释放。
+    ///
+    /// ## 为什么必须有它
+    /// `_loaded` 原先**只增不减**（全仓库唯一的删除点是 `retry()`），
+    /// 本章每一张成功加载的图都**永久驻留**。
+    /// 长章（条带源 / 禁漫天堂常见 100~300 页）按单页 1080×3000 RGBA ≈ 12MB 估，
+    /// 50 页就是 400MB+ → **必被 Jetsam 杀进程**。
+    /// Nuke 的 `ImageCache`（`costLimit` 100MB）救不了 —— `_loaded` 持强引用，
+    /// 与 Nuke 自身的逐出逻辑完全无关。
+    ///
+    /// ## 窗口取值
+    /// 往后 10 页（主要阅读方向，与 `effectiveAhead` 一致）+
+    /// 往前 5 页（回看时少一次重新解码）。共 ~16 页 ≈ 200MB 上限，
+    /// 在「不杀进程」与「回看不闪白」之间取的折中。
+    ///
+    /// ⚠️ 淘汰**不发** `objectWillChange`：被淘汰的页都在可视窗口之外，
+    ///    UI 上没有可观察变化；发通知只会白白触发一次重绘。
+    private static let memoryWindowBack = 5
+    private static let memoryWindowAhead = 10
+
+    private func evictOutsideWindow(center: Int) {
+        let lo = center - Self.memoryWindowBack
+        let hi = center + Self.memoryWindowAhead
+        lock.lock()
+        let evict = _loaded.keys.filter { $0 < lo || $0 > hi }
+        for k in evict { _loaded[k] = nil }
+        // ⚠️ 只淘汰**图像**，`_ratios` 一律保留 —— 比例是布局的依据，
+        //    丢掉它会让页面高度回退到占位估算 → 内容整体位移（视觉割裂）。
+        lock.unlock()
+        if !evict.isEmpty {
+            DiagLog.event("img", "evict", "内存窗口淘汰 \(evict.count) 页（保留 \(lo)…\(hi)）")
+        }
+    }
+
+    /// 受限并发预载：只负责「为还没加载的页起任务」，并发额度统一由 `Self.gate` 管。
+    ///
+    /// ⚠️ 这里**不再预先占据 inflight**。旧实现先 insert 再 await 闸门，
+    /// 导致 `image(at:)` 看到 inflight 就去死等（→ 30 秒轮询的来源）。
+    /// 现在统一走 `image(at:)`，由它来保证去重。
+    ///
+    /// ── 第四轮改造（借鉴 Aidoku 的 `ReaderPagePrefetcher`）────────────────
+    /// 在起加载任务之前，先用 Nuke 的 `ImagePrefetcher` 把这批 URL 的**字节**
+    /// 预取进磁盘缓存。好处：
+    ///   · 预取与渲染解耦 —— 用户快速滑动时不会因为「cell 已回收」而白下载
+    ///   · Nuke 的预取器有**自己的并发与优先级调度**，比我们一股脑 `Task{}` 更平滑
+    ///   · 真正显示时 `image(at:)` 命中磁盘缓存，是「本地 IO + 解码」，几十毫秒
+    private func runLimited(_ range: [Int]) {
+        let pending: [Int]
+        let urls: [String]
+        lock.lock()
+        pending = range.filter { _urls.indices.contains($0) && _loaded[$0] == nil && !_failed.contains($0) && inflight[$0] == nil }
+        urls = pending.map { _urls[$0] }
+        lock.unlock()
+        guard !pending.isEmpty else { return }
+
+        // ⓪ 离线章节：本地文件已经在盘上，Nuke 预取毫无意义（还会白白建请求）。
+        if isOffline {
+            for j in pending { Task { [weak self] in _ = await self?.image(at: j) } }
+            return
+        }
+
+        // ① 先用 Nuke 预取字节（不阻塞，内部自有调度）
+        let reqs = urls.compactMap { u -> ImageRequest? in
+            var hh: [String: String] = ["Referer": referer, "User-Agent": ua]
+            for (k, v) in extraHeaders { hh[k] = v }
+            return HMDImagePipeline.request(url: u, referer: referer, ua: ua, headers: hh)
+        }
+        if !reqs.isEmpty { HMDImagePipeline.prefetcher.startPrefetching(with: reqs) }
+
+        // ② 同时起加载任务（走统一闸门）。命中预取结果的会立刻返回。
+        for j in pending {
+            Task { [weak self] in
+                _ = await self?.image(at: j)
+            }
+        }
+    }
+}
+
+/// 异步并发闸门（信号量）—— 用 actor 而非 DispatchSemaphore：
+/// 后者在 async 上下文里 `wait()` 会阻塞协作线程池，极易死锁。
+///
+/// ⚠️ 额度守恒是这个类的**唯一不变量**：`acquire()` 拿到额度（active += 1
+/// 或从 waiters 里被直接移交给），`release()` 必须正好还掉一次。
+/// 旧实现 `release()` 在 `guard !waiters.isEmpty` 分支里不减 `active`、
+/// 直接把额度转交 —— 数学上没错，但一旦 `run` 的 body 里抛错/被取消导致
+/// `release()` 被跳过，`active` 就会永久泄漏，闸门彻底堵死（所有图片全挂）。
+/// 这里改用 `defer` 保证一定归还，并把「转交」写成「先减再加」，
+/// 任何单点失败都不会污染额度计数。
+actor AsyncGate {
+    private let limit: Int
+    private var active = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) { self.limit = max(1, limit) }
+
+    private func acquire() async {
+        if active < limit {
+            active += 1
+            return
+        }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            waiters.append(c)
+        }
+        // 被 resume 时额度已经由 release() 记在自己名下，这里不再自增
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            active = max(0, active - 1)
+            return
+        }
+        // 先归还再转交，保证计数始终守恒
+        active = max(0, active - 1)
+        let c = waiters.removeFirst()
+        active += 1
+        c.resume()
+    }
+
+    func run<T>(_ body: @Sendable () async -> T) async -> T {
+        await acquire()
+        defer { release() }        // ⚠️ 必须 defer：body 抛错/取消也要归还额度
+        return await body()
+    }
+
+    /// 调试用：当前在飞数量
+    var debugActive: Int { active }
+    var debugWaiting: Int { waiters.count }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// MARK: - 图集收藏：取「原始字节」
+// ──────────────────────────────────────────────────────────────────────────────
+extension ChapterImageStore {
+    /// 取某一页的**原始图片字节**（已过图源解码），供图集收藏使用。
+    ///
+    /// ── 为什么不复用 `loadRaw` ──────────────────────────────────────────────
+    /// `loadRaw` 是阅读器的**热路径**：返回「已解码 + 已裁白边」的 `UIImage`，
+    /// 且带着一整套为滚动优化的取消/重试/失败标记逻辑。
+    /// 收藏是**低频动作**（用户偶尔点一下），为省一次请求去动主链路，
+    /// 风险远大于收益 —— 阅读器一旦回归，用户立刻能感觉到。
+    ///
+    /// 这里只做「同一套 headers 取字节 → 跑同一个解码器」，
+    /// 保证收藏到的字节和在线阅读看到的**是同一份**（都过了 `decodeBytes`）。
+    /// 注意：**不裁白边** —— 收藏要的是原图，裁剪是阅读器的显示偏好。
+    func originalBytes(at index: Int) async -> Data? {
+        guard let url = urlAt(index) else { return nil }
+        var hh: [String: String] = ["Referer": referer, "User-Agent": ua]
+        for (k, v) in extraHeaders { hh[k] = v }
+        guard let req = HMDImagePipeline.request(url: url, referer: referer, ua: ua, headers: hh) else {
+            return nil
+        }
+        do {
+            let (d, _) = try await HMDImagePipeline.shared.data(for: req)
+            guard !d.isEmpty else { return nil }
+            return await Self.decodeBytes(d, origin: origin, baseUrl: url, headers: hh)
+        } catch {
+            return nil
+        }
+    }
+}
+
+// ── 已删除：DecodedImageCache / ImageDiskCache ──────────────────────────────
+// 第四轮改造把这两者都交给了 Nuke（`HMDImagePipeline`）：
+//   · 内存缓存 → `Nuke.ImageCache`（costLimit 100MB，按像素计费，LRU + 自动逐出）
+//   · 磁盘缓存 → `Nuke.DataCache`（sizeLimit 500MB，按原始字节 LRU）
+// 保留自己的实现只会造成「两份缓存互不同步、内存双倍占用」。
+//
+// 注意：本项目仍有解密需求（`RULE_BOOK_CONTENT_DECODER`），
+// 解密后的字节会**回写** Nuke 缓存（见 `loadRaw` 里 `cache.storeData(_:for:cacheType:)`），
+// 因此下载一次之后，后续都是「本地命中 + 解码」。

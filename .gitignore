@@ -1,0 +1,15 @@
+build/
+.build/
+*.xcodeproj
+DerivedData/
+*.ipa
+Payload/
+.DS_Store
+
+# 签名工具与历史构建产物（本地工作文件，不入库）
+.zsign/
+# CI 诊断临时产物（本地分析用，不入库）
+ciout/
+.zsign/
+_msg.txt
+_p*.py

@@ -1,0 +1,121 @@
+# Azure Pipelines 配置 —— 与 .circleci/config.yml 等价的备选免费构建通道
+#
+# ── 为什么有这份文件 ────────────────────────────────────────────────
+# 1. GitHub Actions：miraphael 账号被平台封锁（2026-10-08 起实测仍封锁）
+# 2. Codemagic：2026-10-16 起账户 402（试用/免费额度耗尽）
+# 3. CircleCI（首选）：Free 30,000 credits/月，macOS 200 credits/分钟
+#    → 约 150 分钟/月
+#
+# Azure Pipelines（本文件，备选）：
+#   · 免费层：私有项目 1 个 Microsoft-hosted 并行 job + 每月 1,800 分钟
+#     （macOS 镜像计入这些分钟）；
+#   · 公开项目则 10 并行、分钟数不限；
+#   · 用 GitHub 账号登录 dev.azure.com 即可，无需信用卡。
+#
+# ── 使用步骤 ─────────────────────────────────────────────────────────
+#   1. 登录 https://dev.azure.com（Microsoft 账号）
+#   2. 新建项目 → Pipelines → New pipeline → 选 GitHub → 授权 miraphael/huimandao
+#   3. 选 "Existing Azure Pipelines YAML file" → 分支 main → 路径
+#      /azure-pipelines.yml
+#   4. 首次手动 Run；之后每次 push main 自动触发
+#   5. 产物 绘漫岛-unsigned.ipa 在构建详情页 Artifacts（发布为 pipeline artifact）
+#
+# ⚠️ 本配置产出**未签名** IPA，装机仍需 zsign 重签（同 Codemagic 流程）。
+#
+# Xcode：macOS-15 镜像自带 Xcode 16.x（默认 ≥16.3，满足 Nuke 的 nonisolated
+# 要求）；脚本内做一次显式 xcode-select（多版本镜像时锁定 16.4，缺失则
+# 用镜像默认），保证「默认版本意外回退」时仍能编译。
+
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'macOS-15'
+
+variables:
+  SCHEME: 绘漫岛
+  PROJECT: 绘漫岛.xcodeproj
+
+steps:
+  - checkout: self
+    fetchDepth: 1
+
+  - bash: |
+      set -euo pipefail
+      xcodebuild -version
+      swift --version
+      # 镜像可能预装多个 Xcode：优先锁 16.4（Nuke 13.x 需要 ≥16.3 的
+      # nonisolated 支持）；路径不存在就用镜像默认版本。
+      if [ -d "/Applications/Xcode_16.4.app" ]; then
+        echo "锁定 Xcode 16.4"
+        sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+      fi
+      xcodebuild -version
+    displayName: 'Show toolchain versions'
+
+  - bash: |
+      set -euo pipefail
+      # project.yml 用 sources 全目录 glob，新增 Swift 文件无需改工程；
+      # 但新增 SwiftPM 依赖必须改 project.yml（本步会读取它）。
+      xcodegen --version || brew install xcodegen
+      xcodegen generate
+    displayName: 'Generate Xcode project'
+
+  - bash: |
+      set -euo pipefail
+      # 首次解析较慢（要拉远端包），失败不阻断 —— 下一步 build 会重试。
+      xcodebuild -project "$PROJECT" \
+        -resolvePackageDependencies -scheme "$SCHEME" || true
+    displayName: 'Resolve SPM dependencies'
+
+  - bash: |
+      set -euo pipefail
+      # ⚠️ 必须显式检查退出码（2026-10-09 踩过的坑）：
+      #    编译失败时 Xcode 已拷资源进 .app 但无二进制，
+      #    管道收尾会掩盖失败、把空壳打成 IPA。
+      set +e
+      xcodebuild -project "$PROJECT" \
+        -scheme "$SCHEME" \
+        -configuration Release \
+        -sdk iphoneos \
+        -destination 'generic/platform=iOS' \
+        CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
+        -derivedDataPath build \
+        build > build.log 2>&1
+      BUILD_STATUS=$?
+      set -e
+      grep -E "error:|warning:|BUILD" build.log | tail -100 || true
+      if [ "$BUILD_STATUS" -ne 0 ]; then
+        echo "❌ xcodebuild 失败（exit $BUILD_STATUS），完整日志见 build.log 产物"
+        tail -60 build.log
+        exit 1
+      fi
+
+      APP=$(ls -d build/Build/Products/Release-iphoneos/*.app 2>/dev/null | head -1)
+      if [ -z "$APP" ]; then
+        echo "❌ 找不到构建产物 .app"
+        exit 1
+      fi
+      EXEC_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null || echo "")
+      if [ -z "$EXEC_NAME" ] || [ ! -f "$APP/$EXEC_NAME" ]; then
+        echo "❌ 打包失败：$APP 缺少可执行文件（CFBundleExecutable='$EXEC_NAME'）"
+        exit 1
+      fi
+
+      rm -rf Payload 绘漫岛-unsigned.ipa
+      mkdir -p Payload
+      echo "Packaging $APP (exec=$EXEC_NAME)"
+      cp -R "$APP" Payload/
+      zip -qry 绘漫岛-unsigned.ipa Payload
+      ls -lh 绘漫岛-unsigned.ipa
+    displayName: 'Build unsigned IPA'
+
+  - publish: 绘漫岛-unsigned.ipa
+    artifact: ipa
+    displayName: 'Publish IPA artifact'
+
+  - publish: build.log
+    artifact: logs
+    displayName: 'Publish build log'

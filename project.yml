@@ -1,0 +1,130 @@
+name: 绘漫岛
+options:
+  bundleIdPrefix: com.wsw
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+packages:
+  SwiftSoup:
+    url: https://github.com/scinfu/SwiftSoup
+    from: "2.7.2"
+  BigInt:
+    url: https://github.com/attaswift/BigInt
+    from: "5.3.0"
+  SWCompression:
+    url: https://github.com/miraphael/SWCompression
+    from: "4.9.3"
+  # Nuke —— 业界成熟的图片加载/缓存/预取管线（Aidoku 用的就是它）。
+  # 引入原因：手写的 ImageDiskCache + DecodedImageCache + 自定义并发闸门
+  # 在「多图并发 + 磁盘 LRU + 解码」上要处理的边界太多，实测仍有「图片转圈」。
+  # Nuke 自带：内存/磁盘双层缓存、请求去重、优先级、取消传播、渐进解码、
+  # 预取器（ImagePrefetcher）、以及按 URL 自动复用同一个 in-flight 请求。
+  Nuke:
+    url: https://github.com/kean/Nuke
+    from: "13.2.0"
+  SQLCipher:
+    url: https://github.com/sqlcipher/SQLCipher.swift.git
+    from: "4.10.0"
+targets:
+  绘漫岛:
+    type: application
+    platform: iOS
+    sources:
+      - path: 绘漫岛
+        excludes:
+          - "Resources/web"
+      - path: Vendor/unrar
+        excludes:          # 这些 .cpp 由其它编译单元 #include，不能独立编译（unrar makefile 同样不单独编译）
+          - "arccmt.cpp"
+          - "blake2s_sse.cpp"
+          - "blake2sp.cpp"
+          - "coder.cpp"
+          - "cmdfilter.cpp"
+          - "cmdmix.cpp"
+          - "crypt1.cpp"
+          - "crypt2.cpp"
+          - "crypt3.cpp"
+          - "crypt5.cpp"
+          - "hardlinks.cpp"
+          - "isnt.cpp"
+          - "log.cpp"
+          - "model.cpp"
+          - "rarpch.cpp"
+          - "recvol.cpp"
+          - "recvol3.cpp"
+          - "recvol5.cpp"
+          - "suballoc.cpp"
+          - "threadmisc.cpp"
+          - "uicommon.cpp"
+          - "uiconsole.cpp"
+          - "uisilent.cpp"
+          - "ulinks.cpp"
+          - "unpack15.cpp"
+          - "unpack20.cpp"
+          - "unpack30.cpp"
+          - "unpack50.cpp"
+          - "unpack50frag.cpp"
+          - "unpack50mt.cpp"
+          - "unpackinline.cpp"
+          - "uowners.cpp"
+          - "win32acl.cpp"
+          - "win32lnk.cpp"
+          - "win32stm.cpp"
+          # 非源码文件，避免被打进 bundle
+          - "*.vcxproj"
+          - "*.rc"
+          - "makefile"
+          - "*.txt"
+      # 网页图源编辑器（folder reference，整目录拷入 bundle 根，路径 = web/…）
+      - path: WebResources/web
+        type: folder
+        buildPhase: resources
+      # ── 🔴 App 不再内置图源（2026-10-14，用户要求）──────────────────────
+      #    原先这里显式登记了两份合集：
+      #      · `builtin_sources.json`     309 条规则源
+      #      · `builtin_js_sources.json`   26 条 JS 源
+      #    都已从资源里删除（备份在仓库根 `source_backup/`）。
+      #
+      #    ⚠️ **这两行必须一起删掉** —— XcodeGen 会在 `Generate Xcode project`
+      #    阶段报 `has a missing source directory`，构建直接失败（踩过一次）。
+      #
+      #    下面这份 `builtin_purge_list.txt` 只是**纯 URL 清单**（309 行、7 KB），
+      #    不含任何规则，用于老用户升级时**精确清理**当年自动导入的那批源；
+      #    它不是「内置图源」，删掉它只会导致老用户那批源留在库里。
+      - path: 绘漫岛/Resources/builtin_purge_list.txt
+        buildPhase: resources
+    dependencies:
+      - package: SwiftSoup
+      - package: BigInt
+      - package: SWCompression
+      - package: Nuke
+      - package: SQLCipher
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wsw.cospa.ios
+        PRODUCT_NAME: 绘漫岛
+        # 🔴 版本号规则：**每次升级只加 0.01** —— 1.0.01 → 1.0.02 → 1.0.03 …
+        #    （末位两位，每次 +1，读作 +0.01；不要一次跳到 1.1.0 这种大步）
+        MARKETING_VERSION: "1.0.20"
+        # 构建号：iOS 要求它是单调递增的整数，与上面的版本号各自独立维护
+        CURRENT_PROJECT_VERSION: 22
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.9"
+        ENABLE_BITCODE: NO
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        INFOPLIST_FILE: 绘漫岛/Info.plist
+        SUPPORTS_MACCATALYST: NO
+        SWIFT_OBJC_BRIDGING_HEADER: 绘漫岛/Bridging/HMDBridging.h
+        GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "RARDLL=1", "_UNIX=1", "_FILE_OFFSET_BITS=64", "_LARGEFILE_SOURCE=1", "SQLITE_HAS_CODEC=1"]
+        CLANG_CXX_LANGUAGE_STANDARD: gnu++17
+        HEADER_SEARCH_PATHS: ["$(inherited)", "$(SRCROOT)/Vendor/unrar", "$(SRCROOT)/绘漫岛/Bridging"]
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+schemes:
+  绘漫岛:
+    build:
+      targets:
+        绘漫岛: all
+    archive:
+      config: Release

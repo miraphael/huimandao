@@ -1,0 +1,120 @@
+# Codemagic CI 配置 —— GitHub Actions 不可用时的替代构建通道
+#
+# ── 为什么需要这份文件 ────────────────────────────────────────────────
+# 2026-10-08 诊断确认：GitHub 账号 `miraphael` 的 Actions 被平台级封锁 ——
+# 连「只 echo 一句、不 checkout、不装依赖」的 ubuntu-latest 极简任务都拿不到
+# runner（runner_id: 0、steps: 0、2 秒结束）。这不是代码或配置问题，
+# 因此本仓库的 .github/workflows/build-ipa.yml 在解封前无法产出 IPA。
+#
+# Codemagic 提供每月 500 分钟免费 macOS 额度（本项目单次构建约 3~5 分钟，
+# 足够跑 100 次以上），且对个人账号完全开放。
+#
+# ── 使用步骤 ─────────────────────────────────────────────────────────
+#   1. 注册 https://codemagic.io （可用 GitHub 账号直接登录）
+#   2. 授权它读取本仓库 miraphael/huimandao
+#   3. 在 Codemagic 里 Add application → 选这个仓库
+#   4. 它会自动发现本文件（codemagic.yaml），点 Start new build 即可
+#   5. 构建完成后在 Artifacts 里下载 绘漫岛-unsigned.ipa
+#
+# ⚠️ 这份配置产出的是**未签名** IPA，与 GitHub Actions 那份一致。
+#    装到手机上仍需用 Sideloadly / AltStore 之类工具自助签名。
+
+workflows:
+  build-ipa:
+    name: Build iOS IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      # ⚠️ 必须是 Xcode 16.3+（Codemagic 的 latest 一般远新于此）。
+      #    原因见下方 "Build unsigned IPA" 前的说明：Nuke 13.x 的源码用了
+      #    `nonisolated` 修饰符（Swift 6.1 / Xcode 16.3 起支持），
+      #    Xcode 16.2 会在编译 Nuke 自身时报错。
+      xcode: latest
+      # Codemagic 内置的 macOS 镜像已包含 xcodegen，无需额外安装
+      vars:
+        SCHEME: 绘漫岛
+        PROJECT: 绘漫岛.xcodeproj
+    # ⚠️ 缓存 SPM 与 DerivedData（2026-10-09 加）：
+    #    首次构建要拉 Nuke / SwiftSoup / BigInt / SWCompression + BitByteData
+    #    五个包，网络慢时这一步能占掉大半构建时间。有缓存后二次构建快很多。
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/org.swift.swiftpm
+        - $HOME/Library/Developer/Xcode/DerivedData
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: Show toolchain versions
+        script: |
+          # 打印环境信息，便于失败时判断是工具链问题还是代码问题
+          xcodebuild -version
+          xcodegen --version || brew install xcodegen
+          swift --version
+
+      - name: Generate Xcode project
+        script: |
+          # project.yml 用 sources 全目录 glob，新增 Swift 文件无需改工程；
+          # 但新增 SwiftPM 依赖必须改 project.yml（本步会读取它）。
+          xcodegen generate
+
+      - name: Resolve SPM dependencies
+        script: |
+          # 解析 Nuke / SwiftSoup / BigInt / SWCompression。
+          # 首次解析较慢（要拉远端包），失败不阻断 —— 下一步的 build 会重试。
+          xcodebuild -project "$PROJECT" -resolvePackageDependencies -scheme "$SCHEME" || true
+
+      - name: Build unsigned IPA
+        script: |
+          # ⚠️ 必须显式检查 xcodebuild 的退出码。
+          #    旧写法是 `xcodebuild … 2>&1 | tee build.log | grep … | tail -80`，
+          #    管道最后一条命令（grep/tail）返回 0 → 整个脚本继续往下跑，
+          #    而编译失败时 Xcode **已经把资源拷进了 绘漫岛.app**，只是没有可执行文件，
+          #    于是脚本把「只有资源、没有二进制的空壳 .app」打成 IPA 发布，
+          #    步骤还被标记 success。2026-10-09 就是这样掩盖了一个真实编译错误
+          #    （ComicSource.swift 重名），白等了一次构建才发现。
+          set -euo pipefail
+          set +e
+          xcodebuild -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
+            -derivedDataPath build \
+            build > build.log 2>&1
+          BUILD_STATUS=$?
+          set -e
+          grep -E "error:|warning:|BUILD" build.log | tail -100 || true
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            echo "❌ xcodebuild 失败（exit $BUILD_STATUS），完整日志见 build.log 产物"
+            tail -60 build.log
+            exit 1
+          fi
+
+          APP=$(ls -d build/Build/Products/Release-iphoneos/*.app 2>/dev/null | head -1)
+          # 空壳 .app（只有资源、没有可执行文件）绝不能发布
+          if [ -z "$APP" ]; then
+            echo "❌ 找不到构建产物 .app"
+            exit 1
+          fi
+          EXEC_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null || echo "")
+          if [ -z "$EXEC_NAME" ] || [ ! -f "$APP/$EXEC_NAME" ]; then
+            echo "❌ 打包失败：$APP 缺少可执行文件（CFBundleExecutable='$EXEC_NAME'）"
+            exit 1
+          fi
+
+          rm -rf Payload 绘漫岛-unsigned.ipa
+          mkdir -p Payload
+          echo "Packaging $APP (exec=$EXEC_NAME)"
+          cp -R "$APP" Payload/
+          zip -qry 绘漫岛-unsigned.ipa Payload
+          ls -lh 绘漫岛-unsigned.ipa
+
+    artifacts:
+      # IPA（主产物）+ 构建日志（失败时用来定位编译错误）
+      - 绘漫岛-unsigned.ipa
+      - build.log

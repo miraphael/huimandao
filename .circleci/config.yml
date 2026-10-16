@@ -1,0 +1,136 @@
+# CircleCI 配置 —— GitHub Actions 封锁 / Codemagic 计费中断后的免费替代构建通道
+#
+# ── 为什么有这份文件 ────────────────────────────────────────────────
+# 1. GitHub Actions：miraphael 账号自 2026-10-08 起被平台级封锁
+#    （job 能创建但拿不到 runner，runner_id: 0、steps: 0、4 秒失败），
+#    实测 2026-10-16 仍封锁（.github/workflows/probe.yml 复测失败）。
+# 2. Codemagic：2026-10-16 起账户 402 BILLING_NOT_ENABLED（试用耗尽）。
+#
+# CircleCI Free 计划（截至 2026-10）：
+#   · 30,000 credits/月，macOS M4 Pro Medium = 200 credits/分钟
+#     → 每月约 150 分钟 macOS 构建时间，单次构建 8~12 分钟（有缓存），
+#       足够个人开发者每月十几次迭代；
+#   · 无需信用卡，GitHub OAuth 一键授权；
+#   · macOS 并发 1（个人使用正好）；
+#   · 授权后 push main 自动触发，也支持 API 手动触发。
+#
+# ── 使用步骤 ─────────────────────────────────────────────────────────
+#   1. 登录 https://circleci.com（用 GitHub 账号 miraphael 直接登录）
+#   2. 授权它读取本仓库 miraphael/huimandao（授权后自动装 webhook，
+#      push main 即触发构建）
+#   3. 首次构建在 Builds 页可见；产物 绘漫岛-unsigned.ipa 在 Artifacts 里
+#   4. ⚠️ 本配置产出的是**未签名** IPA，装到手机需 zsign 重签（同 Codemagic 流程）
+#
+# Xcode 版本：16.4.0（CircleCI 官方镜像支持，macOS 15.3.2）。
+#   必须 ≥16.3：Nuke 13.x 源码用了 `nonisolated` 修饰符（Swift 6.1 起），
+#   Xcode 16.2 编译 Nuke 自身会报错。
+
+version: 2.1
+
+jobs:
+  build:
+    macos:
+      xcode: "16.4.0"
+    resource_class: m4pro.medium
+    environment:
+      # brew 装依赖时禁止自动更新（否则多花 4 分钟）
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - checkout
+
+      # ── SPM 与 DerivedData 缓存（复刻 Codemagic 的 cache_paths）────────
+      # 首次构建要拉 Nuke / SwiftSoup / BigInt / SWCompression / SQLCipher
+      # 五个包，网络慢时占掉大半构建时间。key 按 project.yml 内容哈希，
+      # 依赖变了自动换新 key。
+      - restore_cache:
+          keys:
+            - v1-spm-{{ checksum "project.yml" }}
+            - v1-spm-
+
+      - run:
+          name: Show toolchain versions
+          command: |
+            xcodebuild -version
+            swift --version
+            xcodegen --version || brew install xcodegen
+
+      - run:
+          name: Generate Xcode project
+          command: |
+            # project.yml 用 sources 全目录 glob，新增 Swift 文件无需改工程；
+            # 但新增 SwiftPM 依赖必须改 project.yml（本步会读取它）。
+            xcodegen generate
+
+      - run:
+          name: Resolve SPM dependencies
+          command: |
+            # 解析 Nuke / SwiftSoup / BigInt / SWCompression / SQLCipher。
+            # 首次解析较慢（要拉远端包），失败不阻断 —— 下一步 build 会重试。
+            xcodebuild -project 绘漫岛.xcodeproj \
+              -resolvePackageDependencies -scheme 绘漫岛 || true
+
+      - run:
+          name: Build unsigned IPA
+          command: |
+            # ⚠️ 必须显式检查 xcodebuild 的退出码（2026-10-09 踩过的坑）：
+            #    编译失败时 Xcode 已把资源拷进 .app 但无二进制，
+            #    若用管道 grep/tail 收尾会掩盖失败、把空壳打成 IPA。
+            set -euo pipefail
+            set +e
+            xcodebuild -project 绘漫岛.xcodeproj \
+              -scheme 绘漫岛 \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
+              -derivedDataPath build \
+              build > build.log 2>&1
+            BUILD_STATUS=$?
+            set -e
+            grep -E "error:|warning:|BUILD" build.log | tail -100 || true
+            if [ "$BUILD_STATUS" -ne 0 ]; then
+              echo "❌ xcodebuild 失败（exit $BUILD_STATUS），完整日志见 build.log 产物"
+              tail -60 build.log
+              exit 1
+            fi
+
+            APP=$(ls -d build/Build/Products/Release-iphoneos/*.app 2>/dev/null | head -1)
+            # 空壳 .app（只有资源、没有可执行文件）绝不能发布
+            if [ -z "$APP" ]; then
+              echo "❌ 找不到构建产物 .app"
+              exit 1
+            fi
+            EXEC_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null || echo "")
+            if [ -z "$EXEC_NAME" ] || [ ! -f "$APP/$EXEC_NAME" ]; then
+              echo "❌ 打包失败：$APP 缺少可执行文件（CFBundleExecutable='$EXEC_NAME'）"
+              exit 1
+            fi
+
+            rm -rf Payload 绘漫岛-unsigned.ipa
+            mkdir -p Payload
+            echo "Packaging $APP (exec=$EXEC_NAME)"
+            cp -R "$APP" Payload/
+            zip -qry 绘漫岛-unsigned.ipa Payload
+            ls -lh 绘漫岛-unsigned.ipa
+
+      - store_artifacts:
+          path: 绘漫岛-unsigned.ipa
+          destination: 绘漫岛-unsigned.ipa
+      - store_artifacts:
+          path: build.log
+          destination: build.log
+
+      # 缓存刷新放在构建之后：与 project.yml 同 key，覆盖旧缓存
+      - save_cache:
+          key: v1-spm-{{ checksum "project.yml" }}
+          paths:
+            - ~/Library/Caches/org.swift.swiftpm
+            - ~/Library/Developer/Xcode/DerivedData
+
+workflows:
+  build-ipa:
+    jobs:
+      - build:
+          filters:
+            branches:
+              only: main
