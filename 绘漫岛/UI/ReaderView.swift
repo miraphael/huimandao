@@ -177,6 +177,10 @@ struct ReaderView: View {
                 readerChrome
                 Spacer(minLength: 0)
             }
+            // 🔴 章节列表的 sheet 挂在**浮层**上，而不是和 `showSettings` 挂在同一个视图上。
+            //    同一个视图挂两个 `.sheet` 在部分 iOS 版本下会互相抢占，
+            //    表现就是「点了没反应」（用户反馈「看不到所有章目录」）。
+            .sheet(isPresented: $showChapterList) { chapterListSheet }
         }
         .overlay { Color.black.opacity(s.eyeCare ? 0.25 : 0).allowsHitTesting(false) }
         // 🔴 亮度方向以前是反的：`(1 - brightness) * 0.6` —— 滑块**越大画面越暗**，
@@ -225,7 +229,6 @@ struct ReaderView: View {
             store?.flushRatios()
         }
         .sheet(isPresented: $showSettings) { readerSettingsSheet }
-        .sheet(isPresented: $showChapterList) { chapterListSheet }
         .toolbar(.hidden, for: .tabBar)
         // 阅读器恒定深色 → 导航栏也用深色配色，标题/按钮才看得见。
         // ⚠️ 故意**不用** `.preferredColorScheme(.dark)`：那会改整个 window 的深浅色，
@@ -271,11 +274,15 @@ struct ReaderView: View {
 
                 // ⚠️ `.id(chapterIndex)` 让标题随章节重建 —— 否则新旧章节名长度相近时
                 //    SwiftUI 会复用同一个 Text，出现「切了章标题还显示上一章」。
-                Text(chapter?.name ?? "")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .id(chapterIndex)
-                    .animation(nil, value: chapterIndex)
+                // 标题也可点 → 直接开章节列表（用户习惯：点标题换章）
+                Button { showChapterList = true } label: {
+                    Text(chapter?.name ?? "")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .id(chapterIndex)
+                }
+                .buttonStyle(.plain)
+                .animation(nil, value: chapterIndex)
 
                 Spacer(minLength: 0)
 
@@ -299,18 +306,26 @@ struct ReaderView: View {
             .background(Color.black.opacity(0.62))
 
             // 章节数小框（离线角标 + 页码 + 第 X/Y 章）
-            HStack(spacing: 6) {
-                if offline {
-                    Label("离线", systemImage: "arrow.down.circle.fill")
-                        .font(.caption2).foregroundStyle(.green.opacity(0.9))
+            // **点一下直接开章节列表** —— 用户直觉就是点这里换章，
+            // 只有 ☰ 图标太隐蔽（用户反馈「看不到所有章目录」）。
+            Button { showChapterList = true } label: {
+                HStack(spacing: 6) {
+                    if offline {
+                        Label("离线", systemImage: "arrow.down.circle.fill")
+                            .font(.caption2).foregroundStyle(.green.opacity(0.9))
+                    }
+                    Text(chromeChipText)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.92))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.65))
                 }
-                Text(chromeChipText)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.92))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Color.black.opacity(0.45))
+                .clipShape(Capsule())
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Color.black.opacity(0.45))
-            .clipShape(Capsule())
+            .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.horizontal, 12)
         }
@@ -1001,6 +1016,18 @@ struct ReaderView: View {
                 // 滚动模式下「下一章」按钮在内容最底部，翻到中间想换章要一直滑到底；
                 // 翻页模式更是只能靠"翻到本章最后一页"触发。这里给一个**随时可达**的入口。
                 Section {
+                    // 章节列表（第三个入口：浮层 ☰ / 点标题 / 点章节数小框 / 这里）
+                    Button {
+                        showSettings = false
+                        // ⚠️ 先关设置再开列表：同一个 runloop 里「关一个 sheet + 开另一个」
+                        //    在 iOS 上会互相打架（新 sheet 弹不出来），必须错开一拍。
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 350_000_000)
+                            showChapterList = true
+                        }
+                    } label: {
+                        Label("章节列表（\(info.chapters.count) 章）", systemImage: "list.bullet")
+                    }
                     Button {
                         showSettings = false
                         Task { await loadChapter(chapterIndex - 1) }
