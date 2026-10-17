@@ -334,7 +334,25 @@ final class ChapterImageStore: ObservableObject {
     ///
     /// ⚠️ 但**预载窗口不能跟着放大**：预载是「主动提前打」的请求，
     /// 和可视区内的即时请求叠加。保持 `preloadAhead = 6`。
-    private static let maxConcurrent = 6
+    ///
+    /// ── 为什么 2026-10-17 又从 6 提到 10 ────────────────────────────────
+    /// 实测（包子漫画图 CDN `s1.bzcdn.net`，HTTP/1.1、**单连接限速 40~85 KB/s**）：
+    ///
+    ///   并发  聚合速率   单张中位
+    ///    1    36 KB/s    2.82s
+    ///    4   259 KB/s    1.70s
+    ///    6   407 KB/s    1.67s
+    ///    8   522 KB/s    1.70s
+    ///   12   690 KB/s    1.61s   ← 到 12 仍未被限流
+    ///
+    /// 结论：单张耗时由 CDN 单连接决定（约 1.6s 起步，改不了），
+    /// **能改的只有同时跑几路**。首屏实际待办是「可视 2~3 张 + 预载 6 张 ≈ 9 个请求」，
+    /// 卡在 6 就必然分两批（约 3.4s），放到 10 可以一批到齐（约 2s）。
+    ///
+    /// ⚠️ 必须与 `HMDImagePipeline.maxConnectionsPerHost` 一致：闸门放行 10 而
+    ///    URLSession 只给 6 个连接时，剩下 4 个会在 URLSession 内部排队。
+    /// ⚠️ 不要再往上加：10 路对图站已算激进，再高容易触发限流/封 IP。
+    private static let maxConcurrent = 10
     /// 慢链路自适应：若最近几次请求明显偏慢，暂时把预载收敛，
     /// 避免「越慢越排队、越排队越慢」。阈值取实测代理态中位数（约 8s）。
     private static let slowRTT: TimeInterval = 6.5

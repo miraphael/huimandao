@@ -31,6 +31,13 @@ import UIKit
 ///    见 `request(url:referer:ua:)`。
 enum HMDImagePipeline {
 
+    /// 每个图站 host 的最大并发连接数。
+    ///
+    /// ⚠️ 必须与 `ChapterImageStore.maxConcurrent`（应用层并发闸门）保持一致，
+    ///    否则闸门放行的任务会在 URLSession 内部排队，白等一轮。
+    /// 取值依据见下面 `config.httpMaximumConnectionsPerHost` 处的实测表。
+    static let maxConnectionsPerHost = 10
+
     /// 管线实例（全局共享）。App 启动时调用一次 `setup()`。
     static let shared = ImagePipeline(delegate: nil) {
         // 磁盘缓存：500MB，按「原始字节」计
@@ -49,6 +56,29 @@ enum HMDImagePipeline {
         config.urlCache = nil
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
+        // 🔴 **每个 host 的最大连接数**（2026-10-17 实测，这是图片慢的真正瓶颈）。
+        //
+        // `URLSessionConfiguration.default` 的默认值是 **6**，而图站是 **HTTP/1.1**
+        // （无多路复用）：一个连接同一时刻只能跑一个请求 → 6 个连接就是 6 路并发上限。
+        // 实测包子漫画的图 CDN（`s1.bzcdn.net`）**单连接被限速到 40~85 KB/s**，
+        // 单张 0.7~1.4MB 就要 2~4 秒；而**并发几乎线性提速**：
+        //
+        //   并发  聚合速率   单张中位
+        //    1    36 KB/s    2.82s
+        //    4   259 KB/s    1.70s
+        //    6   407 KB/s    1.67s
+        //    8   522 KB/s    1.70s
+        //   12   690 KB/s    1.61s   ← 到 12 仍未被限流，单张中位不再变化
+        //
+        // 也就是说「每张图要多久」是 CDN 单连接决定的，我们唯一能改的是
+        // **同时能跑几路**。提到 10 后，首屏那 6~9 张能在约 2 秒内全部到齐，
+        // 而不是分两批（每批 2 秒）。
+        //
+        // ⚠️ 这里必须和 `ChapterImageStore.maxConcurrent`（应用层闸门）保持一致：
+        //    闸门放行 10 个任务、而 URLSession 只给 6 个连接时，剩下 4 个会
+        //    在 URLSession 内部排队，白白多等一轮。
+        // ⚠️ 不要继续往上堆：10 路对图站已算激进，再高容易触发站点限流/封 IP。
+        config.httpMaximumConnectionsPerHost = HMDImagePipeline.maxConnectionsPerHost
         $0.dataLoader = DataLoader(configuration: config)
 
         // 存原始数据（见类注释）：磁盘缓存跨版本可复用，也便于我们排查「存进去的是什么」
