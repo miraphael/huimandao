@@ -162,7 +162,17 @@ struct ReaderView: View {
         //    导航栏显隐会改变安全区 → 阅读器视口高度变化 → 布局重算 → 画面跳动
         //    （正是刚修完的「首屏定位」那类问题的温床）。自绘 overlay 只改透明度，
         //    对布局零影响。
-        .overlay(alignment: .top) { readerChrome }
+        //
+        // 🔴 用「满屏 VStack + Spacer」而不是 `.overlay(alignment: .top)`：
+        //    `alignment: .top` 对齐的是**视图边界**（含状态栏/刘海区域），
+        //    隐藏导航栏后浮层会顶到刘海底下（用户反馈「也要适应刘海」）。
+        //    VStack 的内容由 SwiftUI 自动按**安全区**内缩，浮层就永远在刘海下方。
+        .overlay {
+            VStack(spacing: 0) {
+                readerChrome
+                Spacer(minLength: 0)
+            }
+        }
         .overlay { Color.black.opacity(s.eyeCare ? 0.25 : 0).allowsHitTesting(false) }
         // 🔴 亮度方向以前是反的：`(1 - brightness) * 0.6` —— 滑块**越大画面越暗**，
         //    而且默认 0.5 反而把整屏提亮 0.3，跟「亮度」语义正好相反。
