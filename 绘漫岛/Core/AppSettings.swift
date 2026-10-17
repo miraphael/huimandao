@@ -50,6 +50,11 @@ final class AppSettings: ObservableObject {
 
     // 阅读器
     @AppStorage("readMode") var readMode = 1            // 1滚动 2翻页 3日漫 4双页 5双页日漫
+    /// 翻页 / 双页模式的显示方式。
+    ///   · `true`（默认）= **适应屏幕**：整页完整显示在屏内，不裁切、不留黑边
+    ///   · `false`       = **铺满屏幕**：按屏幕比例放大后裁掉溢出的部分（画面更满）
+    /// 滚动模式不受它影响（滚动模式恒为「按宽度铺满 + 纵向滚动」）。
+    @AppStorage("fitScreen") var fitScreen = true
     @AppStorage("whiteEdgeCut") var whiteEdgeCut = true
     @AppStorage("keepScreenOn") var keepScreenOn = false
     @AppStorage("eyeCare") var eyeCare = false

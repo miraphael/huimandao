@@ -499,7 +499,7 @@ struct ReaderView: View {
                 if let store {
                     // 同上：整体缩放（翻页模式下也是「一屏一起放大」）
                     ForEach(0..<store.count, id: \.self) { i in
-                        StoreImage(store: store, index: i, fill: true)
+                        StoreImage(store: store, index: i, fill: !s.fitScreen)
                             .tag(i)
                     }
                 }
@@ -770,11 +770,11 @@ struct ReaderView: View {
         HStack(spacing: 0) {
             if isRTL {
                 // 右→左：序号大的在左，序号小的在右
-                if second < store.count { StoreImage(store: store, index: second, fill: true) }
-                StoreImage(store: store, index: first, fill: true)
+                if second < store.count { StoreImage(store: store, index: second, fill: !s.fitScreen) }
+                StoreImage(store: store, index: first, fill: !s.fitScreen)
             } else {
-                StoreImage(store: store, index: first, fill: true)
-                if second < store.count { StoreImage(store: store, index: second, fill: true) }
+                StoreImage(store: store, index: first, fill: !s.fitScreen)
+                if second < store.count { StoreImage(store: store, index: second, fill: !s.fitScreen) }
             }
         }
     }
@@ -961,6 +961,11 @@ struct ReaderView: View {
                     }
                     .pickerStyle(.segmented)
                     Text("双页 = 一屏两页（左→右）；双页日漫 = 右→左，适合日漫。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Toggle(isOn: $s.fitScreen) {
+                        Label("适应屏幕", systemImage: "rectangle.arrowtriangle.2.inward")
+                    }
+                    Text("开启：整页完整显示在屏内，不裁切。关闭：铺满屏幕、裁掉边缘。仅影响翻页 / 双页模式。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Section("屏幕") {
@@ -1328,9 +1333,20 @@ struct StoreImage: View {
             // ⚠️ 用 current(_:) 单点查询，不要读 `store.loaded` 整字典
             // （后者每次访问都加锁拷贝整个字典，一屏 10 个 cell 就是 10 次全量拷贝）
             if let img = store.current(index) {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFit()
+                // 🔴 `fill` 以前是**死参数**（声明了但没人用，永远走 scaledToFit）。
+                //    2026-10-17 补上：翻页 / 双页模式由「适应屏幕」开关决定
+                //      · fitScreen = true  → scaledToFit：整页完整显示（不裁切）
+                //      · fitScreen = false → scaledToFill：铺满屏幕，裁掉溢出部分
+                if fill {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+                } else {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFit()
+                }
             } else if store.failed.contains(index) {
                 ZStack {
                     Color.gray.opacity(0.15)

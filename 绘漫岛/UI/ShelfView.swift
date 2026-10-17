@@ -85,7 +85,11 @@ struct ShelfView: View {
                 .background(Color.clear)
             }
         }
-        .navigationTitle("书架")
+        // 用户要求：书架页顶部那个「书架」标题隐藏。
+        // ⚠️ 只清标题、**不隐藏整条导航栏** —— 栏里还有「分组筛选」按钮（topBarLeading），
+        //    整条隐藏会把筛选入口一起干掉；而且详情页的返回按钮也依赖它。
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: ShelfRoute.self) { route in
             switch route {
             case .continue_(let item):
