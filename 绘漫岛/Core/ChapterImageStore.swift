@@ -103,11 +103,15 @@ final class ChapterImageStore: ObservableObject {
         return _ratios.count
     }
 
-    /// 本章已知比例的**中位数**（样本不足 3 个时返回 nil）。
+    /// 本章已知比例的**中位数**；本章样本不足时退回**同书其它章**的中位比例。
     ///
     /// 用途：给「还没加载过」的页一个比写死 1.45 准得多的估算 ——
     /// 同一章、同一站点的漫画页比例通常高度一致，用中位数估算后
     /// 首次加载时的高度跳变会小一个数量级。
+    ///
+    /// 2026-10-17 起：**新章**（本章一个样本都没有）也会返回书级中位数，
+    /// 不再直接给 nil —— 见 `bookRatioKey` 那段注释。
+    /// 只有「第一次看这本书」才会返回 nil（调用方再退 1.45）。
     var medianRatio: CGFloat? {
         lock.lock()
         // ⚠️ 必须按 `_urls.count` 过滤：持久化读回来的比例里可能有**超出当前页数**
@@ -117,7 +121,9 @@ final class ChapterImageStore: ObservableObject {
         //    （第二轮复核智能体发现：我先前那句「越界项根本不会被读到」只对 heights 成立。）
         let vals = _ratios.filter { $0.key < _urls.count }.map(\.value)
         lock.unlock()
-        guard vals.count >= 3 else { return nil }
+        // 本章样本不足 → 用**同书其它章**的中位比例兜底（2026-10-17）。
+        // 只有第一次看这本书（书级也没学过）才会返回 nil，调用方再退 1.45。
+        guard vals.count >= 3 else { return bookMedian }
         let sorted = vals.sorted()
         return sorted[sorted.count / 2]
     }
@@ -137,6 +143,9 @@ final class ChapterImageStore: ObservableObject {
         if inRange.count >= 3 {
             let sorted = inRange.sorted()
             med = sorted[sorted.count / 2]
+        } else {
+            // 新章（本章还没样本）：用同书中位比例估算，别退回 1.45
+            med = bookMedian
         }
         return (_ratios, med, _urls.count)
     }
@@ -252,7 +261,41 @@ final class ChapterImageStore: ObservableObject {
         for (i, r) in _ratios where r > 0 && r < Self.ratioBound { out[String(i)] = Double(r) }
         lock.unlock()
         UserDefaults.standard.set(out, forKey: Self.ratioPrefix + key)
+        // 顺便把「这本书的中位比例」更新一下，供**其它没读过的章**估算高度用
+        updateBookMedian()
         trimRatioStoreIfNeeded()
+    }
+
+    /// 把本章的中位比例并进**书级**估算（指数平滑）。
+    ///
+    /// 只在样本够（≥3 页）时更新 —— 一两页的「中位数」毫无代表性，
+    /// 拿它去当整本书的占位比只会引入新的误差。
+    private func updateBookMedian() {
+        guard let key = persistKey else { return }
+        lock.lock()
+        let vals = _ratios.filter { $0.key < _urls.count }.map(\.value)
+        lock.unlock()
+        guard vals.count >= 3 else { return }
+        let sorted = vals.sorted()
+        let med = sorted[sorted.count / 2]
+        guard med > 0, med < Self.ratioBound else { return }
+
+        let bk = Self.bookKey(from: key)
+        let d = UserDefaults.standard
+        var map = d.dictionary(forKey: Self.bookRatioKey) as? [String: Double] ?? [:]
+        let blended: Double
+        if let old = map[bk], old > 0, old < Double(Self.ratioBound) {
+            blended = old * (1 - Self.bookRatioBlend) + Double(med) * Self.bookRatioBlend
+        } else {
+            blended = Double(med)
+        }
+        map[bk] = blended
+        if map.count > Self.bookRatioLimit {
+            // 超上限丢一半：先收成数组再删，避免「边遍历边改字典」
+            let dropKeys = Array(map.keys.prefix(map.count - Self.bookRatioLimit / 2))
+            for k in dropKeys { map.removeValue(forKey: k) }
+        }
+        d.set(map, forKey: Self.bookRatioKey)
     }
 
     /// 限制比例缓存的**章节数上限**（LRU 淘汰最旧的）。
@@ -284,6 +327,46 @@ final class ChapterImageStore: ObservableObject {
     private static let ratioChapterLimit = 300
     /// 记录每章比例最近写入时间的键（用于 LRU）。
     private static let ratioOrderKey = "hmd.imageratio.order.v1"
+
+    // ── 书级比例（跨章节，2026-10-17）────────────────────────────────────
+    /// **书级中位比例**的存储键：一个字典 `bookKey → 中位比例`。
+    ///
+    /// 为什么需要（真机日志实锤「第一次打开新章会跳一下」）：
+    /// 比例是**按章**持久化的（`persistKey`），所以一本**没读过的新章**里
+    /// 一个样本都没有 → `medianRatio` 为 nil → 退回写死的 1.45。
+    /// 而真实比例可能差很远（包子漫画的横版画格条只有 ~0.78，竖版页 1.4~2.9），
+    /// 于是「打开瞬间的总高」与「图到齐后的总高」能差几千像素：
+    /// `[fixup] strip 补偿 824→1073（页 1 移 249px，总高 19667→23956）`。
+    ///
+    /// 修法：把**同一本书已读章节**的中位比例记下来，新章打开时先拿它估算。
+    /// 同一本书的画格比例通常很接近，误差能小一个数量级。
+    private static let bookRatioKey = "hmd.imageratio.bookmed.v1"
+    /// 最多记多少本书（超出丢一半；被丢的下次读到时重新学）。
+    private static let bookRatioLimit = 120
+    /// 指数平滑权重：老值占 0.65、本次章中位数占 0.35。
+    /// 用平滑而不是「取最后一次」—— 单章异常（插页广告、超长条）不该带偏整本。
+    private static let bookRatioBlend: Double = 0.35
+
+    /// 本书的估算比例（nil = 还没学过，仍用 `StripMetrics.fallbackRatio`）。
+    private let bookMedian: CGFloat?
+
+    /// 从章节的 `persistKey` 里截出「书」的部分。
+    ///
+    /// ⚠️ 与 `ReaderView.ratioKey` 的拼接格式**强耦合**：
+    ///    `"<origin>|<noteUrl>|<anchor>|<discriminator>"` —— 前两段就是书的身份。
+    ///    那边改格式时这里必须同步，否则会退化成「每章一本书」，等于没做。
+    private static func bookKey(from persistKey: String) -> String {
+        let parts = persistKey.split(separator: "|", maxSplits: 3,
+                                     omittingEmptySubsequences: false)
+        guard parts.count >= 2 else { return persistKey }
+        return parts[0] + "|" + parts[1]
+    }
+
+    private static func storedBookMedian(bookKey: String) -> CGFloat? {
+        let d = UserDefaults.standard.dictionary(forKey: bookRatioKey) as? [String: Double] ?? [:]
+        guard let v = d[bookKey], v > 0, v < Double(ratioBound) else { return nil }
+        return CGFloat(v)
+    }
 
     /// 标记比例需要落盘（防抖：≥1.5 秒才真正写，避免滚动时每帧都写）。
     ///
@@ -379,6 +462,9 @@ final class ChapterImageStore: ObservableObject {
         self.origin = origin
         self.localFiles = []
         self.persistKey = persistKey
+        self.bookMedian = persistKey.flatMap {
+            Self.storedBookMedian(bookKey: Self.bookKey(from: $0))
+        }
         loadPersistedRatios()
     }
 
@@ -395,6 +481,9 @@ final class ChapterImageStore: ObservableObject {
         self.origin = origin
         self.localFiles = localFiles
         self.persistKey = persistKey
+        self.bookMedian = persistKey.flatMap {
+            Self.storedBookMedian(bookKey: Self.bookKey(from: $0))
+        }
         loadPersistedRatios()
     }
 
