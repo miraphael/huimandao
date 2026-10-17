@@ -37,6 +37,10 @@ struct ReaderView: View {
     /// 双击/回弹动画进行中 —— 期间不接收拖拽写入，免得动画被打断成半路
     @State private var animatingFlip = false
     @State private var showMenu = false
+    /// 章节列表（选章）面板 —— 阅读中想换章时随时可达。
+    @State private var showChapterList = false
+    /// 顶部浮层的「几秒后自动收起」任务（重复唤起时先取消上一次）。
+    @State private var chromeHideTask: Task<Void, Never>?
     @State private var page = 0
     /// 双页模式的**跨页序号**。
     ///
@@ -153,22 +157,12 @@ struct ReaderView: View {
                     .onChange(of: g.size) { readerViewport = $0 }
             }
         )
-        .overlay(alignment: .topTrailing) {
-            HStack(spacing: 6) {
-                if offline {
-                    Label("离线", systemImage: "arrow.down.circle.fill")
-                        .font(.caption2).foregroundStyle(.green.opacity(0.9))
-                }
-                Text("\(s.readMode == 1 ? "" : "\(page + 1)/\(store?.count ?? 0)  ")第\(chapterIndex + 1)章")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            // 半透明黑底：漫画画面可能是任意颜色，只靠白字压不住浅色背景。
-            .background(Color.black.opacity(0.35))
-            .clipShape(Capsule())
-            .padding(8)
-        }
+        // ── 阅读器浮层（顶栏 + 章节数小框）──────────────────────────────────
+        // 🔴 自绘浮层，**不用**系统导航栏 + `.toolbar(showMenu ? .visible : .hidden)`：
+        //    导航栏显隐会改变安全区 → 阅读器视口高度变化 → 布局重算 → 画面跳动
+        //    （正是刚修完的「首屏定位」那类问题的温床）。自绘 overlay 只改透明度，
+        //    对布局零影响。
+        .overlay(alignment: .top) { readerChrome }
         .overlay { Color.black.opacity(s.eyeCare ? 0.25 : 0).allowsHitTesting(false) }
         // 🔴 亮度方向以前是反的：`(1 - brightness) * 0.6` —— 滑块**越大画面越暗**，
         //    而且默认 0.5 反而把整屏提亮 0.3，跟「亮度」语义正好相反。
@@ -181,7 +175,14 @@ struct ReaderView: View {
         //      ② 阅读设置 sheet 的 Form 会整片变白，违反「阅读器恒定黑底白字」。
         //    （由智能体「主题」发现两处，这里一次修掉）
         .environment(\.colorScheme, .dark)
-        .onAppear { UIApplication.shared.isIdleTimerDisabled = s.keepScreenOn }
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = s.keepScreenOn
+            // 进章节先把顶部浮层亮出来，几秒后自动收起（用户要求：打开时能看到标题，
+            // 又不长期挡画面）
+            revealChrome()
+        }
+        // 切章后同样亮一下再自动收起（不然换完章不知道换到哪了）
+        .onChange(of: chapterIndex) { _ in revealChrome() }
         // ⚡️ 自动保存进度：进后台（上滑回桌面 / 锁屏）也强制落一次。
         // 这是用户最常触发的「离开阅读器」路径，比 onDisappear 更早也更可靠。
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
@@ -209,6 +210,7 @@ struct ReaderView: View {
             store?.flushRatios()
         }
         .sheet(isPresented: $showSettings) { readerSettingsSheet }
+        .sheet(isPresented: $showChapterList) { chapterListSheet }
         .toolbar(.hidden, for: .tabBar)
         // 阅读器恒定深色 → 导航栏也用深色配色，标题/按钮才看得见。
         // ⚠️ 故意**不用** `.preferredColorScheme(.dark)`：那会改整个 window 的深浅色，
@@ -216,34 +218,165 @@ struct ReaderView: View {
         //    `toolbarColorScheme` 只作用于导航栏，没有这个副作用。
         .darkToolbarScheme()
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                // ⚠️ 加 `.id(chapterIndex)` 强制标题栏随章节重建。
-                //    不加的话，切章时若新旧章节名恰好都是同一长度/同前缀，
-                //    SwiftUI 可能复用同一个 Text 节点、不重绘 —— 表现就是
-                //    「点了下一章，标题栏还显示上一章的名字」（用户反馈的"章节名会卡"）。
+        // 系统导航栏**永久隐藏**，顶部信息改由自绘浮层 `readerChrome` 承担 ——
+        // 显隐不改变安全区，也就不会把画面顶来顶去。
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    // MARK: - 顶部浮层（顶栏 + 章节数小框）
+
+    /// 顶部浮层：返回 / 章节列表 / 标题 / 收藏 / 设置 + 章节数小框。
+    ///
+    /// 显隐由 `showMenu` 驱动：打开章节时自动出现、约 3 秒后收起；
+    /// 点画面中间可以再唤起（或立刻收起）。
+    private var readerChrome: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 14) {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 32, height: 30)
+                }
+                .accessibilityLabel("返回")
+
+                Button { showChapterList = true } label: {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 32, height: 30)
+                }
+                .accessibilityLabel("章节列表")
+
+                Spacer(minLength: 0)
+
+                // ⚠️ `.id(chapterIndex)` 让标题随章节重建 —— 否则新旧章节名长度相近时
+                //    SwiftUI 会复用同一个 Text，出现「切了章标题还显示上一章」。
                 Text(chapter?.name ?? "")
-                    .foregroundStyle(.white)
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .id(chapterIndex)
                     .animation(nil, value: chapterIndex)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                // 收藏当前页（再点一次即取消）。
-                // ⚠️ 只在「这一页已经有图」时才算收藏成功 —— 图还没下载完就收藏，
-                //    拿不到原始字节，只会存下一个空文件（`FavoriteSession` 会给出提示）。
+
+                Spacer(minLength: 0)
+
                 Button { Task { await toggleFavorite() } } label: {
                     Image(systemName: favoriteOn ? "heart.fill" : "heart")
                         .foregroundStyle(favoriteOn ? Color.pink : Color.white)
+                        .frame(width: 32, height: 30)
                 }
                 .disabled(store == nil)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
+                .accessibilityLabel(favoriteOn ? "取消收藏" : "收藏本页")
+
                 Button { showSettings = true } label: {
-                    Image(systemName: "slider.horizontal.3").foregroundStyle(.white)
+                    Image(systemName: "slider.horizontal.3")
+                        .frame(width: 32, height: 30)
+                }
+                .accessibilityLabel("阅读设置")
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.black.opacity(0.62))
+
+            // 章节数小框（离线角标 + 页码 + 第 X/Y 章）
+            HStack(spacing: 6) {
+                if offline {
+                    Label("离线", systemImage: "arrow.down.circle.fill")
+                        .font(.caption2).foregroundStyle(.green.opacity(0.9))
+                }
+                Text(chromeChipText)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.92))
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color.black.opacity(0.45))
+            .clipShape(Capsule())
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 12)
+        }
+        .opacity(showMenu ? 1 : 0)
+        .allowsHitTesting(showMenu)
+        .animation(.easeInOut(duration: 0.2), value: showMenu)
+    }
+
+    /// 章节数小框的文字。
+    /// ⚠️ 不要把三元表达式塞进字符串插值里（引号会互相打架，brace2.py 抓过同类问题）。
+    private var chromeChipText: String {
+        let pagePart = s.readMode == 1 ? "" : "\(page + 1)/\(store?.count ?? 0)  "
+        return "\(pagePart)第 \(chapterIndex + 1)/\(info.chapters.count) 章"
+    }
+
+    /// 唤起顶部浮层，并在 3 秒后自动收起。
+    private func revealChrome(autoHide: Bool = true) {
+        withAnimation(.easeInOut(duration: 0.2)) { showMenu = true }
+        chromeHideTask?.cancel()
+        guard autoHide else { return }
+        chromeHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.25)) { showMenu = false }
+        }
+    }
+
+    /// 点画面中间：没显示就唤起（带自动收起），已显示就立刻收起。
+    private func toggleChrome() {
+        if showMenu {
+            chromeHideTask?.cancel()
+            withAnimation(.easeInOut(duration: 0.2)) { showMenu = false }
+        } else {
+            revealChrome()
+        }
+    }
+
+    // MARK: - 章节列表（选章）
+
+    /// 章节列表面板 —— 阅读到一半想换章时不用翻到章末，也不用去设置里点「下一章」。
+    private var chapterListSheet: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                List {
+                    ForEach(Array(info.chapters.enumerated()), id: \.offset) { idx, ch in
+                        Button {
+                            showChapterList = false
+                            guard idx != chapterIndex else { return }
+                            Task { await loadChapter(idx) }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Text(ch.name)
+                                    .lineLimit(1)
+                                    .foregroundStyle(idx == chapterIndex ? Color.accentColor : Color.primary)
+                                Spacer(minLength: 0)
+                                if idx == chapterIndex {
+                                    Image(systemName: "checkmark")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .id(idx)
+                    }
+                }
+                .listStyle(.plain)
+                .onAppear {
+                    // 打开时滚到当前章。⚠️ 必须**延后一拍**：List 首帧还没完成布局，
+                    // 立刻 scrollTo 会滚不动（iOS 16 上实测）。
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        withAnimation(nil) {
+                            proxy.scrollTo(chapterIndex, anchor: .center)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("章节 \(chapterIndex + 1)/\(info.chapters.count)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") { showChapterList = false }
                 }
             }
         }
+        .presentationDetents([.medium, .large])
     }
 
     /// 当前页是否已收藏（按钮状态）
@@ -280,7 +413,7 @@ struct ReaderView: View {
                     nextChapter: AnyView(nextChapterRow),
                     onPageChange: { reportVisiblePage($0) },
                     onZoomChanged: { z in zoomed = z },
-                    onSingleTap: { withAnimation { showMenu.toggle() } },
+                    onSingleTap: { toggleChrome() },
                     restorePage: stripRestorePage,
                     doubleTapZoomEnabled: s.doubleTapZoom,
                     onRestoreHandled: { stripRestorePage = -1 },
@@ -397,7 +530,7 @@ struct ReaderView: View {
                 switch action {
                 case "next": nextPage()
                 case "prev": prevPage()
-                default: withAnimation { showMenu.toggle() }
+                default: toggleChrome()
                 }
             }
             // 整体缩放：和滚动模式一致 —— 一屏一起放大，不要「上面放大下面原图」。
@@ -537,7 +670,7 @@ struct ReaderView: View {
                 switch action {
                 case "next": nextSpread()
                 case "prev": prevSpread()
-                default: withAnimation { showMenu.toggle() }
+                default: toggleChrome()
                 }
             }
             // 缩放：与单页模式一致，整屏一起放大（包在 TabView 外层）。
