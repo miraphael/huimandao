@@ -368,6 +368,64 @@ final class ChapterImageStore: ObservableObject {
         return CGFloat(v)
     }
 
+    /// 一次性迁移：把 v89 之前存的**按章比例**汇总成**书级中位数**。
+    ///
+    /// 🔴 为什么必须迁移（2026-10-17，装完 v89 立刻发现）：
+    ///    书级比例是 v89 才引入的新存储。装完后第一次打开一本「以前读过几章」的书，
+    ///    书级仍然是**空的** → 依然退 1.45 → 看起来像「根本没修」。
+    ///    但存量里其实早就有按章比例（`hmd.imageratio.v1.<persistKey>`），
+    ///    扫一遍就能立刻算出每本书的中位数，不用等用户重读一遍。
+    ///
+    /// 成本：最多 300 章 × 每章几十~几百个 double，几十毫秒；且只做一次。
+    /// ⚠️ 用 `static let` + 闭包拿到「线程安全地只执行一次」的语义。
+    ///    闭包里**显式写类型名**（`ChapterImageStore.xxx`）—— 静态存储属性初始化
+    ///    闭包里对其它静态成员做**非限定**引用，Swift 的解析规则容易踩坑。
+    private static let migrateBookMediansOnce: Void = {
+        ChapterImageStore.migrateBookMediansNow()
+    }()
+
+    private static func migrateBookMediansNow() {
+        let d = UserDefaults.standard
+        let doneKey = "hmd.imageratio.bookmed.migrated.v1"
+        guard !d.bool(forKey: doneKey) else { return }
+
+        // ① 按「书」把存量比例分桶
+        var buckets: [String: [CGFloat]] = [:]
+        for (k, v) in d.dictionaryRepresentation() {
+            guard k.hasPrefix(ratioPrefix), let raw = v as? [String: Any] else { continue }
+            let bk = bookKey(from: String(k.dropFirst(ratioPrefix.count)))
+            var vals: [CGFloat] = []
+            vals.reserveCapacity(raw.count)
+            for (_, num) in raw {
+                if let dv = num as? Double, dv > 0, dv < Double(ratioBound) {
+                    vals.append(CGFloat(dv))
+                }
+            }
+            // 单章样本太少（1~2 页）时中位数没有代表性，直接丢掉
+            if vals.count >= 3 { buckets[bk, default: []].append(contentsOf: vals) }
+        }
+        guard !buckets.isEmpty else {
+            d.set(true, forKey: doneKey)
+            return
+        }
+
+        // ② 每本书取中位数写进书级表
+        var map = d.dictionary(forKey: bookRatioKey) as? [String: Double] ?? [:]
+        for (bk, vals) in buckets {
+            guard map[bk] == nil else { continue }   // 已有（运行时学到的）就别覆盖
+            let sorted = vals.sorted()
+            let med = sorted[sorted.count / 2]
+            if med > 0, med < ratioBound { map[bk] = Double(med) }
+        }
+        if map.count > bookRatioLimit {
+            let dropKeys = Array(map.keys.prefix(map.count - bookRatioLimit / 2))
+            for k in dropKeys { map.removeValue(forKey: k) }
+        }
+        d.set(map, forKey: bookRatioKey)
+        d.set(true, forKey: doneKey)
+        DiagLog.event("img", "bookratio", "存量比例迁移完成：\(map.count) 本书")
+    }
+
     /// 标记比例需要落盘（防抖：≥1.5 秒才真正写，避免滚动时每帧都写）。
     ///
     /// ⚠️ `setLoaded` 可能在**非主线程**的 Nuke 回调里执行，所以这里用**独立的锁**
@@ -454,6 +512,8 @@ final class ChapterImageStore: ObservableObject {
     init(urls: [String], referer: String, ua: String, whiteCut: Bool,
          headers: [String: String] = [:], origin: String = "",
          persistKey: String? = nil) {
+        // ⚠️ 必须在读 `bookMedian` 之前跑：把存量按章比例汇总成书级（只做一次）
+        _ = Self.migrateBookMediansOnce
         self._urls = urls
         self.referer = referer
         self.ua = ua
@@ -473,6 +533,7 @@ final class ChapterImageStore: ObservableObject {
     /// ⚠️ 这条路径的存在本身就是修复 —— 以前下载完的章节没有任何读取入口，
     ///    阅读器一律联网重抓，用户看到「我明明下载了还要加载」。
     init(localFiles: [URL], whiteCut: Bool, origin: String = "", persistKey: String? = nil) {
+        _ = Self.migrateBookMediansOnce
         self._urls = localFiles.map { $0.path }
         self.referer = ""
         self.ua = ""
