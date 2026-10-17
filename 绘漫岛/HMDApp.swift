@@ -61,7 +61,7 @@ struct HMDApp: App {
                 let shortVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?"
                 let buildVer = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
                 DiagLog.event("app", "version",
-                              "构建指纹 build-99-chapter-list · App 版本 \(shortVer) (\(buildVer))")
+                              "构建指纹 build-100-idle-prefetch · App 版本 \(shortVer) (\(buildVer))")
             }
         }
     }

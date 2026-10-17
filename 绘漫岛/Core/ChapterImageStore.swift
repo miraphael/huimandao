@@ -168,6 +168,11 @@ final class ChapterImageStore: ObservableObject {
     /// 进而动态收敛预载窗口 —— 慢链路上继续猛预载只会让队列更长。
     private var recentRTT: [Double] = []
 
+    /// 最近一次 `preload(around:)` 的锚点页 —— 闲置补载用它校验「用户有没有滑走」。
+    private var lastPreloadCenter: Int = -1
+    /// 闲置补载任务（每次 `preload` 都会取消重排，避免补到旧位置去）
+    private var idleExtendTask: Task<Void, Never>?
+
     /// 当前有效的预载窗口：慢链路时自动收窄。
     /// 判据用「最近 slowWindow 次的**中位数**」而不是平均值 ——
     /// 单张图偶发抖动不该影响整体策略。
@@ -178,8 +183,8 @@ final class ChapterImageStore: ObservableObject {
         guard rtts.count >= Self.slowWindow else { return Self.preloadAhead }
         let sorted = rtts.sorted()
         let median = sorted[sorted.count / 2]
-        if median > Self.slowRTT { return 2 }        // 慢：只预载 2 张，先把当前页稳住
-        if median > Self.slowRTT / 2 { return 4 }
+        if median > Self.slowRTT { return 4 }        // 慢：收窄到 4 张
+        if median > Self.slowRTT / 2 { return 7 }
         return Self.preloadAhead
     }
 
@@ -446,16 +451,23 @@ final class ChapterImageStore: ObservableObject {
     private let saveLock = NSLock()
     private var ratioSaveWork: DispatchWorkItem?
 
-    /// 预载窗口：进入章节先并发拉前 6 张（回到 6）。
-    /// ⚠️ 曾改成 12，结果反而更慢：滚动模式里 LazyVStack 每出现一个新 cell 就会
-    /// 调 `image(at:)`，叠加 12 张预载 → 同时 20+ 个请求打图站 → 图站限流/超时，
-    /// 用户看到的就是「图片划水经常转圈」。**预载窗口不能大于并发闸门**。
-    static let preloadAhead = 6
+    /// 预载窗口：进入章节先并发拉前 10 张。
+    ///
+    /// 变迁：6 → 10（2026-10-17，用户反馈「看太快就跟不上，经常看到没加载出来的」）。
+    /// 并发闸门同期已提到 10（见 `maxConcurrent`），窗口 10 正好能把闸门喂满，
+    /// 又不会超出它 —— 「预载窗口不能大于并发闸门」这条红线仍然成立。
+    ///
+    /// ⚠️ 曾改成 12 反而更慢（2026-10）：滚动模式里 LazyVStack 每出现一个新 cell
+    /// 就会调 `image(at:)`，叠加 12 张预载 → 同时 20+ 个请求打图站 → 图站限流/超时。
+    static let preloadAhead = 10
     /// 「可视区」宽度（锚点往后算几张）。
     /// 这几张按 `.visible` 优先级加载，其余预载按 `.ahead` 让路。
     /// 取 3：滚动模式下同屏通常 1~2 张（条漫画格条更少），3 张已覆盖
     /// 「刚滑过去还没稳定」的情况，再多就等于把预载也算成可视区了。
     static let visibleBand = 3
+    /// 「已经滑过去多远」的在飞任务该被取消（见 `cancelStaleInflight`）。
+    /// 取 8 页 ≈ 往回翻一屏的距离，正常来回微调不会误杀。
+    private static let staleBehind = 8
     /// ⚠️ 22 秒（从 16 上调）：实测（2026-10，包子漫画 c-nd3-1.6wm.top）
     /// 走代理时单张 webp 要 **7.7~12.7 秒**（直连只要 1.7~3.7 秒）。
     /// 16 秒在高延迟链路上会**正常图也判超时 → 走重试 → 更慢**，
@@ -1005,6 +1017,12 @@ final class ChapterImageStore: ObservableObject {
         // ⚠️ **先淘汰窗口外的已解码图**（内存治理，见 `evictOutsideWindow`）。
         //    这一步不能省：`_loaded` 原先只增不减，长章会把整章 UIImage 常驻 → Jetsam。
         evictOutsideWindow(center: index)
+        // 🔴 **先砍掉「已经滑过去很远」的在飞任务**（2026-10-17 用户反馈「看太快跟不上」）：
+        //    闸门只有 10 个额度，快滑时旧位置的任务还占着它们下载根本不会再看的页，
+        //    真正要看的当前页反而排在后面等 —— 这是「滑过去要等一下才出图」的直接原因。
+        //    取消后这些页不进 `_loaded`、不标失败（`loadRaw` 里取消直接 return nil），
+        //    用户回头再看会重新请求，没有副作用。
+        cancelStaleInflight(center: index)
         let start = max(0, index)
         let ahead = effectiveAhead
         lock.lock()
@@ -1026,6 +1044,61 @@ final class ChapterImageStore: ObservableObject {
         }
         if visibleEnd < end {
             runLimited(Array((visibleEnd + 1)...end))
+        }
+
+        // ── 停住不动时**继续往前补**（2026-10-17 用户反馈）──────────────────
+        // 「不往下滑就不加载新的图片」：原设计只预载 anchor…anchor+ahead，
+        // 用户停在那批末尾等着，后面一张都不开始下，再滑又要等。
+        // 这里排一个闲置补载：锚点 1.5 秒没变就再补一批。
+        lock.lock()
+        lastPreloadCenter = index
+        lock.unlock()
+        idleExtendTask?.cancel()
+        scheduleIdleExtension(center: index, ahead: ahead, round: 1)
+    }
+
+    /// 取消「已经滑过去很远」的在飞任务（见 `preload(around:)` 里的说明）。
+    ///
+    /// 判据：`index < center - staleBehind`。取 8 页 —— 相当于「往回翻一屏」的距离，
+    /// 正常的来回微调不会被误杀，真正被甩在身后的才会被砍。
+    private func cancelStaleInflight(center: Int) {
+        let cutoff = center - Self.staleBehind
+        guard cutoff > 0 else { return }
+        lock.lock()
+        var toCancel: [Task<UIImage?, Never>] = []
+        for (i, t) in inflight where i < cutoff {
+            toCancel.append(t)
+            inflight[i] = nil     // 立刻摘牌，允许以后重新请求
+        }
+        lock.unlock()
+        guard !toCancel.isEmpty else { return }
+        for t in toCancel { t.cancel() }
+        DiagLog.event("img", "stale", "取消 \(toCancel.count) 个已滑过的在飞任务（< 页 \(cutoff)）")
+    }
+
+    /// 闲置时继续往前补几批（用户停住不动 → 继续把后面的页拉进磁盘缓存）。
+    ///
+    /// 规则：
+    ///   · 每批 = `ahead` 张，间隔 1.5 秒，最多补 **2 批**（合计 ahead×3 ≈ 30 页）
+    ///   · **锚点必须没变**才补 —— 用户滑走了还补旧位置纯属浪费带宽
+    ///     （2026-10-16 那次「整章被拉完」的教训：预载只能由当前视口驱动）
+    ///   · 一律走 `runLimited`（低优先级 `.ahead`），可视区永远优先
+    private func scheduleIdleExtension(center: Int, ahead: Int, round: Int) {
+        guard round <= 2 else { return }
+        idleExtendTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.lock.lock()
+            let sameAnchor = (self.lastPreloadCenter == center)
+            let total = self._urls.count
+            self.lock.unlock()
+            guard sameAnchor else { return }
+            let lo = center + ahead * round + 1
+            let hi = min(total - 1, center + ahead * (round + 1))
+            guard lo <= hi else { return }
+            DiagLog.event("img", "idle", "闲置补载第 \(round) 批：页 \(lo)…\(hi)")
+            self.runLimited(Array(lo...hi))
+            self.scheduleIdleExtension(center: center, ahead: ahead, round: round + 1)
         }
     }
 
