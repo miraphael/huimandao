@@ -132,11 +132,16 @@ struct ReaderView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if s.readMode == 1 {
-                webtoonPager
+                // 🔴 三种阅读模式都 `.ignoresSafeArea()`（2026-10-17 用户截图实锤）：
+                //    阅读器内容原本被安全区内缩 → 顶部状态栏 44pt + 底部 Home 指示条 34pt
+                //    露出黑底，用户看到的就是「上下两条黑边，那里没有漫画」。
+                //    铺满整屏后黑边消失；顶部浮层仍然按安全区排（见 `readerChrome`），
+                //    所以返回按钮不会跑到刘海下面。
+                webtoonPager.ignoresSafeArea()
             } else if s.readMode == 4 || s.readMode == 5 {
-                spreadPager
+                spreadPager.ignoresSafeArea()
             } else {
-                flipPager
+                flipPager.ignoresSafeArea()
             }
         }
         // ⚠️ 关键：首次进入必须主动加载当前章。
@@ -515,7 +520,7 @@ struct ReaderView: View {
                 if let store {
                     // 同上：整体缩放（翻页模式下也是「一屏一起放大」）
                     ForEach(0..<store.count, id: \.self) { i in
-                        StoreImage(store: store, index: i, fill: !s.fitScreen)
+                        StoreImage(store: store, index: i, fill: s.fillScreen)
                             .tag(i)
                     }
                 }
@@ -786,11 +791,11 @@ struct ReaderView: View {
         HStack(spacing: 0) {
             if isRTL {
                 // 右→左：序号大的在左，序号小的在右
-                if second < store.count { StoreImage(store: store, index: second, fill: !s.fitScreen) }
-                StoreImage(store: store, index: first, fill: !s.fitScreen)
+                if second < store.count { StoreImage(store: store, index: second, fill: s.fillScreen) }
+                StoreImage(store: store, index: first, fill: s.fillScreen)
             } else {
-                StoreImage(store: store, index: first, fill: !s.fitScreen)
-                if second < store.count { StoreImage(store: store, index: second, fill: !s.fitScreen) }
+                StoreImage(store: store, index: first, fill: s.fillScreen)
+                if second < store.count { StoreImage(store: store, index: second, fill: s.fillScreen) }
             }
         }
     }
@@ -978,10 +983,10 @@ struct ReaderView: View {
                     .pickerStyle(.segmented)
                     Text("双页 = 一屏两页（左→右）；双页日漫 = 右→左，适合日漫。")
                         .font(.caption2).foregroundStyle(.secondary)
-                    Toggle(isOn: $s.fitScreen) {
-                        Label("适应屏幕", systemImage: "rectangle.arrowtriangle.2.inward")
+                    Toggle(isOn: $s.fillScreen) {
+                        Label("铺满屏幕", systemImage: "rectangle.arrowtriangle.2.outward")
                     }
-                    Text("开启：整页完整显示在屏内，不裁切。关闭：铺满屏幕、裁掉边缘。仅影响翻页 / 双页模式。")
+                    Text("开启（默认）：按屏幕铺满、裁掉溢出的边缘，画面没有黑边。关闭：整页完整显示，会留黑边。仅影响翻页 / 双页模式。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Section("屏幕") {
@@ -1350,9 +1355,9 @@ struct StoreImage: View {
             // （后者每次访问都加锁拷贝整个字典，一屏 10 个 cell 就是 10 次全量拷贝）
             if let img = store.current(index) {
                 // 🔴 `fill` 以前是**死参数**（声明了但没人用，永远走 scaledToFit）。
-                //    2026-10-17 补上：翻页 / 双页模式由「适应屏幕」开关决定
-                //      · fitScreen = true  → scaledToFit：整页完整显示（不裁切）
-                //      · fitScreen = false → scaledToFill：铺满屏幕，裁掉溢出部分
+                //    2026-10-17 补上，由「铺满屏幕」开关决定（默认开）：
+                //      · fillScreen = true  → scaledToFill：铺满屏幕，裁掉溢出部分（无黑边）
+                //      · fillScreen = false → scaledToFit：整页完整显示（会留黑边）
                 if fill {
                     Image(uiImage: img)
                         .resizable()
