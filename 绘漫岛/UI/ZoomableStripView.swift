@@ -69,8 +69,14 @@ struct StripContentView: View {
             // 窗口之前的页：等高空白占位（高度 == 该页应有的高度）→ 布局精确、滚动条准确
             Color.clear.frame(height: hs[0..<lo].reduce(0, +))
             ForEach(lo..<hi, id: \.self) { i in
+                // 🔴 `alignment: .top` 是**必须的**（2026-10-17 用户反馈「首页的图片没有
+                //    定格在页首上」）：`scaledToFit` 在默认（居中）对齐下，只要槽位高度
+                //    与图片实际高度有一点点差异，图片就会**在槽位里垂直居中** ——
+                //    表现为「图片浮在页中间、上面留一条黑」，而且高度一修正就整体上跳。
+                //    顶部对齐后，图片永远贴着本页顶端（= 页首），多余的空白只出现在
+                //    下方（且随比例修正立刻消失），不会再让内容"漂移"。
                 StoreImage(store: store, index: i)
-                    .frame(height: max(hs[i], 1))
+                    .frame(height: max(hs[i], 1), alignment: .top)
             }
             // 窗口之后的页：同样等高占位
             Color.clear.frame(height: hs[hi...].reduce(0, +))
@@ -375,6 +381,13 @@ struct ZoomableStripView: UIViewRepresentable {
             //         → 进度被写成错的页（「进度没保存」）。
             //    另外 `sv.bounds.height == 0` 说明视图还没布局 / 正在被移除，
             //    此时改 offset 只会制造抖动，直接跳过。
+            // 🔴 顶端锚点必须绝对稳定（2026-10-17 用户反馈「首页的图片没有定格在页首」）：
+            //    只要视口还停在首页顶端附近，任何高度变化都不该把内容推走 —— 直接钉回 0。
+            //    这条与下面的补偿互不冲突：补偿要求 `oldTop > 0`，而这里处理的是 ≈0 的情况。
+            if oldTop < 1, sv.contentOffset.y != 0 {
+                sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: 0)
+            }
+
             // 🔴 2026-10-17：**页数变化时也必须补偿**（用户反馈「打开先出一帧、然后黑屏、
             //    下滑才正常」的真凶）。
             //
@@ -433,6 +446,20 @@ struct ZoomableStripView: UIViewRepresentable {
 
             // ── 渲染窗口 ──────────────────────────────────────────────────
             updateWindow(sv)
+
+            // 🔎 逐帧视口诊断（2026-10-17 加）：只在「高度表变化」时打一条。
+            //    用户反馈「首页图片没定格在页首 / 打开先出一帧再黑屏」，前两轮只能从
+            //    间接线索推断，加这条就能直接看到「视口在哪、渲染窗口在哪、总高怎么变」。
+            //    音量可控：只有 `oldTotal != total` 时才打（纯滚动不打）。
+            if oldTotal != total {
+                let off = sv.contentOffset.y / max(sv.zoomScale, 0.01)
+                DiagLog.event("strip", "viewport",
+                              "改高 总高 \(Int(oldTotal))→\(Int(total))"
+                              + "｜offset \(Int(oldTop))→\(Int(off))"
+                              + "｜可见页 \(page(at: off))"
+                              + "｜窗口 \(window.lowerBound)..<\(window.upperBound)"
+                              + "｜视口高 \(Int(sv.bounds.height))")
+            }
         }
 
         /// 按当前滚动偏移刷新「已渲染的页窗口」。
