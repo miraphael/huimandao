@@ -108,8 +108,15 @@ struct StripContentView: View {
 /// `viewForZooming`（平移边界系统 clamp）、`zoom(to:)`（双击定点放大）
 /// —— 三件事 `UIScrollView` 原生就对。本文件里**没有任何锚点换算**。
 struct ZoomableStripView: UIViewRepresentable {
-    /// 当前章节的图片加载器（同时是内容的观察对象）
-    let store: ChapterImageStore
+    /// 当前章节的图片加载器（同时是内容的观察对象）。
+    ///
+    /// 🔴 **必须是 `@ObservedObject`**（2026-10-17 真机实锤）：原来是 `let store`，
+    ///    于是 store 发布变化（图片加载完、学到真实宽高比）时**不会**触发
+    ///    `updateUIView` → `refresh()` 不跑 → `contentSize` 一直停在「估算总高」。
+    ///    实测：条漫真实比例 0.6~0.9、估算 1.455，总高被高估近一倍（27279 vs ~14500），
+    ///    滚动视图认为内容比实际长得多 → 首屏定位错、少显示几页、滑一下才对。
+    ///    真机日志：图片 11:55:52 就加载完，`[metrics]` 直到 11:56:34（缩放结束）才更新。
+    @ObservedObject var store: ChapterImageStore
     /// 内容宽度（= 视口宽度）
     let contentWidth: CGFloat
     /// 章节末尾「下一章」那一行的高度（计入内容总高，但不参与页码换算）
@@ -138,6 +145,14 @@ struct ZoomableStripView: UIViewRepresentable {
     /// 诊断触发计数 —— 值变化会让 SwiftUI 重算 body → `updateUIView` → 消费 `diag.pending`。
     /// （`StripDiagBridge` 是普通 class，不是 `ObservableObject`，改它的属性不会触发刷新。）
     var diagTick: Int = 0
+
+    /// `store` 的变更计数（`ReaderView` 订阅 `store.objectWillChange` 后递增）。
+    ///
+    /// 只用于**强制 SwiftUI 重算本视图** —— 值一变 → `updateUIView` → `refresh()`。
+    /// `@ObservedObject store` 已经是主通道，这里是**双保险**：万一某条路径下
+    /// representable 没有因对象变化而重建，参数变化也一定会走到 `updateUIView`。
+    /// （`ReaderView` 里那个 `storeTick` 状态以前只自增、没人读，等于空转 —— 见其注释。）
+    var storeTick: Int = 0
 
     func makeUIView(context: Context) -> UIScrollView {
         let sv = UIScrollView()
@@ -180,6 +195,8 @@ struct ZoomableStripView: UIViewRepresentable {
         // `diagTick` 不参与任何逻辑，唯一作用是「值变化 → SwiftUI 认为本视图要更新 →
         // 走到这里 → 消费 `diag.pending`」。显式读一下，免得将来被当成死参数删掉。
         _ = diagTick
+        // 同上：`storeTick` 只用来把「store 变了」翻译成一次 `updateUIView`。
+        _ = storeTick
         context.coordinator.parent = self
 
         // ── ① 续读落位：**必须在 `refresh` 之前** ─────────────────────────────

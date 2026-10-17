@@ -62,7 +62,12 @@ struct ReaderView: View {
     /// `store` 状态变化的订阅 —— 图片加载完会学到**真实宽高比**，
     /// 而每页高度（宽 × 比例）是布局与内容总高的依据，必须据此重算。
     @State private var storeObserver: AnyCancellable?
-    /// 每收到一次 store 变化就自增，用来**触发本视图重绘**（值本身不参与逻辑）
+    /// 每收到一次 store 变化就自增，用来**触发本视图重绘**。
+    ///
+    /// ⚠️ 这个值**必须真的传进 `ZoomableStripView`**（见 `webtoonPager` 的
+    ///    `storeTick: storeTick`）—— 2026-10-17 真机实锤：它曾经只自增、body 里
+    ///    没人读，于是「store 变了」根本没变成一次 `updateUIView`，
+    ///    `refresh()` 不跑、`contentSize` 停在估算总高 → 首屏定位错、少显示几页。
     @State private var storeTick = 0
     /// 诊断截图导出的结果提示
     @State private var diagMessage = ""
@@ -280,7 +285,13 @@ struct ReaderView: View {
                     doubleTapZoomEnabled: s.doubleTapZoom,
                     onRestoreHandled: { stripRestorePage = -1 },
                     diag: stripDiag,
-                    diagTick: diagTick
+                    diagTick: diagTick,
+                    // 🔴 必须把 `storeTick` 传进去（2026-10-17 真机实锤）：
+                    //    原来 `storeTick` 只自增、**body 里从没读过**，而传下去的是
+                    //    另一个 `diagTick` —— 于是 store 变化根本没让 representable
+                    //    重建 → `updateUIView`/`refresh()` 不跑 → `contentSize`
+                    //    停在估算总高（条漫会被高估近一倍）→ 首屏定位错、少几页。
+                    storeTick: storeTick
                 )
             } else {
                 Color.clear
