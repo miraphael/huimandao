@@ -1,16 +1,22 @@
 name: Build iOS IPA
 
-# ── 触发条件（2026-10-16 改）────────────────────────────────────────
-# 原来带 `push: branches: [main]`，但账号 miraphael 自 2026-10-08 起被
-# GitHub Actions 平台级封锁（job 拿不到 runner，4 秒失败，详见 diag.yml），
-# 每次推送都跑一次注定失败的构建只会污染 Actions 列表。
-# 现在只保留手动触发：解封后网页端 Run workflow 即可产出 IPA；
-# 若想恢复自动构建，把下面的 workflow_dispatch 换成
-#   on: [push]  （branches: [main]）
-# 即可。本文件保留完整构建配置，是解封后的第一备用通道
-#（主通道现为 .circleci/config.yml，备选 azure-pipelines.yml）。
+# ── 触发条件（2026-10-17 更新）────────────────────────────────────────
+# 历史：账号 miraphael 曾在 2026-10-08 被 GitHub Actions 平台级封锁
+#（job 拿不到 runner，4 秒失败），当时把 `push` 触发关掉、只留手动。
+# 2026-10-17 复核：仓库已转 public，Actions 完全正常（构建稳定 5~6 分钟），
+# 所以恢复 **push 自动构建**，但加了 `paths` 过滤 —— 只有源码 / 工程配置变化
+# 才构建；纯文档、脚本、图源 JSON 的提交不会白白跑一次（免得 Actions 列表被灌水）。
+#
+# 手动触发仍然保留：网页端 Run workflow，或用 API
+#   POST /repos/<owner>/<repo>/actions/workflows/build-ipa.yml/dispatches {"ref":"main"}
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '绘漫岛/**'
+      - 'project.yml'
+      - '.github/workflows/build-ipa.yml'
   workflow_dispatch:
 
 jobs:
