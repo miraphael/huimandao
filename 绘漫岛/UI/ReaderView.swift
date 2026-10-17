@@ -231,6 +231,12 @@ struct ReaderView: View {
         // 系统导航栏**永久隐藏**，顶部信息改由自绘浮层 `readerChrome` 承担 ——
         // 显隐不改变安全区，也就不会把画面顶来顶去。
         .toolbar(.hidden, for: .navigationBar)
+        // 🔴 再加一道保险（2026-10-17 用户反馈「左上角返回箭头没隐藏」）：
+        //    `.toolbar(.hidden)` 在部分路径下（尤其是被 `navigationDestination` 推入、
+        //    或导航栏被父级重新显式）可能不生效，系统自带的返回箭头就会留在左上角 ——
+        //    它**不属于**自绘浮层，自然不会跟着 `showMenu` 隐藏。
+        //    显式关掉它，返回统一走浮层里的自绘按钮。
+        .navigationBarBackButtonHidden(true)
     }
 
     // MARK: - 顶部浮层（顶栏 + 章节数小框）
