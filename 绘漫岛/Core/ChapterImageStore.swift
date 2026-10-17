@@ -310,6 +310,11 @@ final class ChapterImageStore: ObservableObject {
     /// 调 `image(at:)`，叠加 12 张预载 → 同时 20+ 个请求打图站 → 图站限流/超时，
     /// 用户看到的就是「图片划水经常转圈」。**预载窗口不能大于并发闸门**。
     static let preloadAhead = 6
+    /// 「可视区」宽度（锚点往后算几张）。
+    /// 这几张按 `.visible` 优先级加载，其余预载按 `.ahead` 让路。
+    /// 取 3：滚动模式下同屏通常 1~2 张（条漫画格条更少），3 张已覆盖
+    /// 「刚滑过去还没稳定」的情况，再多就等于把预载也算成可视区了。
+    static let visibleBand = 3
     /// ⚠️ 22 秒（从 16 上调）：实测（2026-10，包子漫画 c-nd3-1.6wm.top）
     /// 走代理时单张 webp 要 **7.7~12.7 秒**（直连只要 1.7~3.7 秒）。
     /// 16 秒在高延迟链路上会**正常图也判超时 → 走重试 → 更慢**，
@@ -504,12 +509,12 @@ final class ChapterImageStore: ObservableObject {
     /// 会提前返回，但后台任务必须继续跑完并把 `inflight` 清掉，
     /// 否则该 index 会被永久标记为「在飞」，后续所有请求都拿到一个已取消的任务。
     @discardableResult
-    func image(at index: Int) async -> UIImage? {
+    func image(at index: Int, priority: LoadPriority = .visible) async -> UIImage? {
         // ⚠️ 所有锁操作必须放在**同步**函数里：`NSLock.lock()` 标了
         //    `@available(*, noasync)`，在 async 函数体内直接调用会告警
         //    （Swift 6 语言模式下直接报错）。这里把「查缓存 / 摘取在飞任务 /
         //    占坑建任务」整体收进一个同步方法，异步侧只拿结果。
-        switch claim(index) {
+        switch claim(index, priority: priority) {
         case .cached(let img):
             return img
         case .failed:
@@ -543,7 +548,7 @@ final class ChapterImageStore: ObservableObject {
         case owner(Task<UIImage?, Never>)
     }
 
-    private func claim(_ index: Int) -> Claim {
+    private func claim(_ index: Int, priority: LoadPriority) -> Claim {
         lock.lock()
         defer { lock.unlock() }
         guard _urls.indices.contains(index) else { return .failed }
@@ -555,7 +560,7 @@ final class ChapterImageStore: ObservableObject {
         let task = Task<UIImage?, Never> { [weak self] in
             guard let self else { return nil }
             defer { self.clearInflight(index) }   // ⚠️ 任务自己负责摘牌
-            return await self.loadNow(index)
+            return await self.loadNow(index, priority: priority)
         }
         inflight[index] = task
         return .owner(task)
@@ -570,7 +575,7 @@ final class ChapterImageStore: ObservableObject {
 
     /// 真正走一遍「缓存 → 闸门 → 下载」。任务本身由 `image(at:)` 创建，
     /// 这里只管干活，不碰 `inflight`。
-    private func loadNow(_ index: Int) async -> UIImage? {
+    private func loadNow(_ index: Int, priority: LoadPriority) async -> UIImage? {
         guard urlAt(index) != nil else { return nil }
 
         // ⓪ **离线章节**：直接读磁盘。放在最前面且**不进闸门** ——
@@ -600,7 +605,9 @@ final class ChapterImageStore: ObservableObject {
         if let img = memoryHit(index) { return img }
 
         // ② 走闸门（带超时兜底）。Nuke 在 `loadRaw` 内部完成缓存判定。
-        return await Self.gate.run { await self.loadRaw(index) }
+        return await Self.gate.run(priority: priority.rawValue) {
+            await self.loadRaw(index, priority: priority)
+        }
     }
 
     /// 离线模式下取第 index 页对应的本地文件（同步，锁内）
@@ -708,7 +715,7 @@ final class ChapterImageStore: ObservableObject {
     ///   · 返回的是**原始字节**（`.storeOriginalData`），解密仍在本类做
     /// ⚠️ 超时交给 Nuke 的 DataLoader（30s/60s），不再自己算 budget；
     ///    但保留一次重试（图站偶发 5xx/Cloudflare 挑战）。
-    private func loadRaw(_ index: Int) async -> UIImage? {
+    private func loadRaw(_ index: Int, priority: LoadPriority) async -> UIImage? {
         let url: String
         switch rawTarget(index) {
         case .none: return nil
@@ -719,7 +726,8 @@ final class ChapterImageStore: ObservableObject {
         var hh: [String: String] = ["Referer": referer, "User-Agent": ua]
         for (k, v) in extraHeaders { hh[k] = v }
 
-        guard let req = HMDImagePipeline.request(url: url, referer: referer, ua: ua, headers: hh) else {
+        guard let req = HMDImagePipeline.request(url: url, referer: referer, ua: ua,
+                                                headers: hh, priority: priority.nuke) else {
             setFailed(index)
             return nil
         }
@@ -813,6 +821,28 @@ final class ChapterImageStore: ObservableObject {
         Task { _ = await image(at: index) }
     }
 
+    /// 退出章节时停掉本章残留的预取（2026-10-17）。
+    ///
+    /// 为什么需要：`HMDImagePipeline.prefetcher` 是**全局单例**，Nuke 只在
+    /// prefetcher **自己**被释放时才取消任务（`ImagePrefetcher.swift` 的 `deinit`），
+    /// 而单例永远不会释放 → 关掉章节后，之前预取的请求还会继续跑完，
+    /// 白占带宽（紧接着打开下一章，首屏就得跟它们抢）。
+    ///
+    /// ⚠️ 按本章 URL 精确停（`stopPrefetching(with:)`），不能用无参的
+    ///    `stopPrefetching()` —— 那会把书架页（`ShelfView`）的预取一起干掉。
+    deinit {
+        lock.lock()
+        let urls = _urls
+        lock.unlock()
+        guard !urls.isEmpty else { return }
+        var hh: [String: String] = ["Referer": referer, "User-Agent": ua]
+        for (k, v) in extraHeaders { hh[k] = v }
+        let reqs = urls.compactMap {
+            HMDImagePipeline.request(url: $0, referer: referer, ua: ua, headers: hh)
+        }
+        if !reqs.isEmpty { HMDImagePipeline.prefetcher.stopPrefetching(with: reqs) }
+    }
+
     // MARK: - 预载
 
     /// ⚠️ 已废弃（2026-10-16）：`prefetchAhead(from:)` 已删除。
@@ -831,7 +861,22 @@ final class ChapterImageStore: ObservableObject {
         let end = min(_urls.count - 1, index + ahead)
         lock.unlock()
         guard start <= end else { return }
-        runLimited(Array(start...end))
+
+        // ── 可视区走 normal，其余预载走 low（2026-10-17）──────────────────
+        // 之前这里一股脑 `runLimited(start...end)`：锚点页和后面 6 张预载
+        // 在 URLSession / 闸门里**同优先级**，快滑时新出现的当前页
+        // 要排在预载后面等 —— 用户感觉「滑过去要等一下才出图」。
+        // 现在把「锚点 + 紧邻 visibleBand 张」按 `.visible` 起任务，
+        // 剩下的才交给 `runLimited`（内部一律 `.ahead`）。
+        let visibleEnd = min(end, start + Self.visibleBand - 1)
+        for j in start...visibleEnd {
+            Task { [weak self] in
+                _ = await self?.image(at: j, priority: .visible)
+            }
+        }
+        if visibleEnd < end {
+            runLimited(Array((visibleEnd + 1)...end))
+        }
     }
 
     /// 内存窗口：保留「当前页 −back ～ 当前页 +ahead」的**已解码**图，其余释放。
@@ -904,10 +949,32 @@ final class ChapterImageStore: ObservableObject {
         if !reqs.isEmpty { HMDImagePipeline.prefetcher.startPrefetching(with: reqs) }
 
         // ② 同时起加载任务（走统一闸门）。命中预取结果的会立刻返回。
+        // ⚠️ 预载一律 `.ahead`（低优先级）：这些页在视口之外，不该和可视区抢连接。
         for j in pending {
             Task { [weak self] in
-                _ = await self?.image(at: j)
+                _ = await self?.image(at: j, priority: .ahead)
             }
+        }
+    }
+}
+
+/// 图片加载优先级（给 `AsyncGate` 与 Nuke 请求共用）。
+///
+/// 为什么不直接用 Nuke 的 `ImageRequest.Priority` 当排队键：
+/// 闸门的等待队列需要一个**可排序的 Int**，而 `ImageRequest.Priority` 是 Nuke
+/// 的封装类型（内部是 Float），拿它当队列键既多余又增加版本耦合风险。
+/// 这里只用最朴素的两档。
+enum LoadPriority: Int, Sendable {
+    /// 可视区（锚点 + 紧邻几张）—— 优先拿连接
+    case visible = 0
+    /// 视口以外的预载 —— 让路
+    case ahead = 1
+
+    /// 传给 Nuke 的请求优先级（决定 `URLSessionTask.priority`）
+    var nuke: ImageRequest.Priority {
+        switch self {
+        case .visible: return .normal
+        case .ahead:   return .low
         }
     }
 }
@@ -925,17 +992,31 @@ final class ChapterImageStore: ObservableObject {
 actor AsyncGate {
     private let limit: Int
     private var active = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    /// 等待者。`priority` 越小越优先（`LoadPriority.visible.rawValue` = 0，
+    /// `.ahead` = 1）；**同优先级严格按先来后到**（靠 `seq` + 严格小于比较保证）。
+    ///
+    /// 为什么要按优先级排队（2026-10-17）：闸门原来是纯 FIFO ——
+    /// 用户快滑时，前面 10 个额度全被「视口以外的预载」占着，
+    /// 刚滑到屏幕上的那一页只能排在它们后面，一等等 1~2 秒。
+    private struct Waiter {
+        let priority: Int
+        let seq: Int
+        let cont: CheckedContinuation<Void, Never>
+    }
+    private var waiters: [Waiter] = []
+    private var seqCounter = 0
 
     init(limit: Int) { self.limit = max(1, limit) }
 
-    private func acquire() async {
+    private func acquire(priority: Int) async {
         if active < limit {
             active += 1
             return
         }
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            waiters.append(c)
+            seqCounter += 1
+            waiters.append(Waiter(priority: priority, seq: seqCounter, cont: c))
         }
         // 被 resume 时额度已经由 release() 记在自己名下，这里不再自增
     }
@@ -947,13 +1028,21 @@ actor AsyncGate {
         }
         // 先归还再转交，保证计数始终守恒
         active = max(0, active - 1)
-        let c = waiters.removeFirst()
+        // 挑优先级最高（数值最小）的那个；严格小于 ⇒ 同优先级不会被后来者插队
+        var pick = 0
+        var i = 1
+        while i < waiters.count {
+            if waiters[i].priority < waiters[pick].priority { pick = i }
+            i += 1
+        }
+        let w = waiters.remove(at: pick)
         active += 1
-        c.resume()
+        w.cont.resume()
     }
 
-    func run<T>(_ body: @Sendable () async -> T) async -> T {
-        await acquire()
+    /// - Parameter priority: 数值越小越优先（默认 1 = 预载，让路给可视区）
+    func run<T>(priority: Int = 1, _ body: @Sendable () async -> T) async -> T {
+        await acquire(priority: priority)
         defer { release() }        // ⚠️ 必须 defer：body 抛错/取消也要归还额度
         return await body()
     }

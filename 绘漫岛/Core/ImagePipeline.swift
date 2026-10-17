@@ -91,7 +91,20 @@ enum HMDImagePipeline {
     /// Aidoku 用的是 `ImagePrefetcher(pipeline:destination:)`；
     /// 这里也把目标设为磁盘缓存 —— 预取的目的是「后续显示时命中缓存」，
     /// 不需要占用内存（内存由显示时的 `loadImage` 自己填）。
-    static let prefetcher = ImagePrefetcher(pipeline: shared, destination: .diskCache)
+    ///
+    /// 🔴 **`maxConcurrentRequestCount` 必须显式给**（2026-10-17 查 Nuke 源码才发现）：
+    ///    Nuke 的默认值是 **2**（`Sources/Nuke/Prefetching/ImagePrefetcher.swift`：
+    ///    `maxConcurrentRequestCount: Int = 2`）。我们用默认值时，一次预取 6 张
+    ///    实际上只有 2 张在跑，剩下 4 张在 prefetcher 自己的队列里排着 ——
+    ///    和「预载窗口 = 6」的设计意图完全不符。
+    ///    这里给 6，与 `ChapterImageStore.preloadAhead` 对齐。
+    ///
+    /// ⚠️ 另一个 Nuke 的坑：`startPrefetching(with:)` 会把传进去的请求优先级
+    ///    **强制改成 prefetcher 自己的 `priority`（默认 `.low`）** ——
+    ///    所以别指望在这里靠 request 上的 priority 调高低，得改 `prefetcher.priority`。
+    ///    `.low` 正是我们想要的（预载让路给可视区），保持默认即可。
+    static let prefetcher = ImagePrefetcher(pipeline: shared, destination: .diskCache,
+                                            maxConcurrentRequestCount: 6)
 
     /// App 启动时调用，把 Nuke 的全局管线替换成上面的配置。
     ///
@@ -121,7 +134,8 @@ enum HMDImagePipeline {
     ///    Nuke 只透传 `URLRequest` 的自定义头；`ImageRequest.userAgent` 是给
     ///    URLSession 层用的，部分站的 Referer 校验只看 URLRequest。
     static func request(url: String, referer: String = "", ua: String = "",
-                        headers: [String: String] = [:]) -> ImageRequest? {
+                        headers: [String: String] = [:],
+                        priority: ImageRequest.Priority = .normal) -> ImageRequest? {
         guard var comp = URLComponents(string: url), comp.scheme != nil else { return nil }
         // 把中文/空格等转义，避免 URL(string:) 返回 nil
         comp.percentEncodedQuery = comp.percentEncodedQuery?
@@ -175,8 +189,14 @@ enum HMDImagePipeline {
             // 同时记进 userInfo，便于调试/排查时看出这张图是按哪组头缓存的
             imageReq.userInfo[ImageRequest.UserInfoKey("hmdHeaders")] = suffix
         }
-        // 优先级：默认 normal；阅读器当前页会调高（见 ReaderView）
-        imageReq.priority = .normal
+        // 优先级：可视区的图用 `.normal`，预载（视口以外）用 `.low`。
+        //
+        // ⚠️ 这条以前是死代码（2026-10-17 查出来的）：注释写着「阅读器当前页会调高
+        //    （见 ReaderView）」，但全仓库 grep 不到任何 `.priority` 赋值 ——
+        //    结果当前页和后面 6 张预载在 URLSession 里**同优先级竞争**，
+        //    快滑时新出现的当前页要排在预载后面。
+        //    现在由 `ChapterImageStore.LoadPriority` 显式传进来。
+        imageReq.priority = priority
         return imageReq
     }
 }
