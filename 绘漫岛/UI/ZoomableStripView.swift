@@ -300,8 +300,17 @@ struct ZoomableStripView: UIViewRepresentable {
         ///    那里拿的是一个**旧坐标系**下的 `oldTop`，一旦用**新**高度表去查，
         ///    内容变矮时会返回偏大很多的页号 —— 那是「白屏 / 画面乱跳 / 进度错乱」的根因。
         private func page(at y: CGFloat, in table: [CGFloat]) -> Int {
-            let n = heights.count
-            guard n > 0, table.count > n else { return 0 }
+            // 🔴 必须以**传入的表**为界，不能用 `heights.count`（2026-10-17 真机实锤）：
+            //    补偿时传进来的是**旧**高度表 `oldCum`。分页章追加页数时
+            //    `oldCum` 有 50 项、新表 `heights` 有 58 项 —— 旧代码的
+            //    `guard table.count > heights.count else { return 0 }` 直接判失败，
+            //    于是**锚点页恒为 0**，`within` 被 clamp 到页 0 的高度，
+            //    视口被往回拽几百 px（日志：`补偿 797→562（页 0 移 234px）`，
+            //    而 797 明明已经在第 2 页里）→ 用户看到「跳到某页又变回第一页」。
+            //    现在按 table 自己的长度二分，索引含义就正确了；
+            //    调用方（补偿）另有「idx 不得超出新表」的护栏。
+            let n = table.count
+            guard n > 0 else { return 0 }
             var lo = 0, hi = n - 1, best = 0
             while lo <= hi {
                 let mid = (lo + hi) / 2
