@@ -36,7 +36,7 @@ enum HMDImagePipeline {
     /// ⚠️ 必须与 `ChapterImageStore.maxConcurrent`（应用层并发闸门）保持一致，
     ///    否则闸门放行的任务会在 URLSession 内部排队，白等一轮。
     /// 取值依据见下面 `config.httpMaximumConnectionsPerHost` 处的实测表。
-    static let maxConnectionsPerHost = 10
+    static let maxConnectionsPerHost = 14
 
     /// 管线实例（全局共享）。App 启动时调用一次 `setup()`。
     static let shared = ImagePipeline(delegate: nil) {
@@ -74,10 +74,16 @@ enum HMDImagePipeline {
         // **同时能跑几路**。提到 10 后，首屏那 6~9 张能在约 2 秒内全部到齐，
         // 而不是分两批（每批 2 秒）。
         //
-        // ⚠️ 这里必须和 `ChapterImageStore.maxConcurrent`（应用层闸门）保持一致：
-        //    闸门放行 10 个任务、而 URLSession 只给 6 个连接时，剩下 4 个会
-        //    在 URLSession 内部排队，白白多等一轮。
-        // ⚠️ 不要继续往上堆：10 路对图站已算激进，再高容易触发站点限流/封 IP。
+        // ── 2026-10-17 再提到 **14**（实测图站并发上限）──────────────────
+        // 同一章 24 张图的实测：
+        //   并发 10 → 10/10 成功、427 KB/s
+        //   并发 14 → 14/14 成功、404 KB/s
+        //   并发 18 → 15/18 成功、567 KB/s   ← 开始丢请求
+        //   并发 24 → 15/24 成功、795 KB/s   ← 丢 9 个，靠重试更慢
+        // 14 是安全上限；再高就变成「失败 + 重试」，净效果更差。
+        //
+        // ⚠️ 这里必须和 `ChapterImageStore.maxConcurrent`（应用层闸门）保持一致，
+        //    否则闸门放行的任务会在 URLSession 内部排队白等。
         config.httpMaximumConnectionsPerHost = HMDImagePipeline.maxConnectionsPerHost
         $0.dataLoader = DataLoader(configuration: config)
 

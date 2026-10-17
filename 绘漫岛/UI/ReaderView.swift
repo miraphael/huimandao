@@ -1407,9 +1407,16 @@ struct StoreImage: View {
                 .frame(minHeight: placeholderHeight)
                 .onTapGesture { store.retry(index) }
             } else {
+                // 未加载页的占位：**带上页码**（2026-10-17）。
+                // 快滑时纯灰块会被读成「坏了 / 空的」，有页码至少知道是第几页在加载。
                 ZStack {
-                    Color.gray.opacity(0.15)
-                    ProgressView().tint(.white)
+                    Color.white.opacity(0.10)
+                    VStack(spacing: 8) {
+                        ProgressView().tint(.white.opacity(0.75))
+                        Text("\(index + 1)")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.40))
+                    }
                 }
                 .frame(minHeight: placeholderHeight)
                 .task { _ = await store.image(at: index) }

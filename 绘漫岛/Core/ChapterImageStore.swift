@@ -459,7 +459,7 @@ final class ChapterImageStore: ObservableObject {
     ///
     /// ⚠️ 曾改成 12 反而更慢（2026-10）：滚动模式里 LazyVStack 每出现一个新 cell
     /// 就会调 `image(at:)`，叠加 12 张预载 → 同时 20+ 个请求打图站 → 图站限流/超时。
-    static let preloadAhead = 10
+    static let preloadAhead = 12
     /// 「可视区」宽度（锚点往后算几张）。
     /// 这几张按 `.visible` 优先级加载，其余预载按 `.ahead` 让路。
     /// 取 3：滚动模式下同屏通常 1~2 张（条漫画格条更少），3 张已覆盖
@@ -491,7 +491,7 @@ final class ChapterImageStore: ObservableObject {
     /// 提到 6 是速度与礼貌的折中：爬虫礼仪上 6 路对图站仍算温和。
     ///
     /// ⚠️ 但**预载窗口不能跟着放大**：预载是「主动提前打」的请求，
-    /// 和可视区内的即时请求叠加。保持 `preloadAhead = 10`。
+    /// 和可视区内的即时请求叠加。保持 `preloadAhead = 12`（仍小于闸门 14）。
     ///
     /// ── 为什么 2026-10-17 又从 6 提到 10 ────────────────────────────────
     /// 实测（包子漫画图 CDN `s1.bzcdn.net`，HTTP/1.1、**单连接限速 40~85 KB/s**）：
@@ -507,10 +507,19 @@ final class ChapterImageStore: ObservableObject {
     /// **能改的只有同时跑几路**。首屏实际待办是「可视 2~3 张 + 预载 6 张 ≈ 9 个请求」，
     /// 卡在 6 就必然分两批（约 3.4s），放到 10 可以一批到齐（约 2s）。
     ///
-    /// ⚠️ 必须与 `HMDImagePipeline.maxConnectionsPerHost` 一致：闸门放行 10 而
-    ///    URLSession 只给 6 个连接时，剩下 4 个会在 URLSession 内部排队。
-    /// ⚠️ 不要再往上加：10 路对图站已算激进，再高容易触发限流/封 IP。
-    private static let maxConcurrent = 10
+    /// ── 为什么 2026-10-17 又提到 **14** ─────────────────────────────────
+    /// 用户反馈「快滑还是经常碰到没加载出来的」。实测图站的并发上限（同一章 24 张）：
+    ///
+    ///   并发  成功      聚合速率
+    ///   10   10/10    427 KB/s
+    ///   14   14/14    404 KB/s
+    ///   18   15/18    567 KB/s   ← 开始丢请求
+    ///   24   15/24    795 KB/s   ← 丢了 9 个，靠重试反而更慢
+    ///
+    /// 所以 **14 是安全上限**：再往上就变成「失败 + 重试」，净效果更慢。
+    /// ⚠️ 必须与 `HMDImagePipeline.maxConnectionsPerHost` 保持一致，
+    ///    否则闸门放行的任务会在 URLSession 内部排队白等。
+    private static let maxConcurrent = 14
     /// 慢链路自适应：若最近几次请求明显偏慢，暂时把预载收敛，
     /// 避免「越慢越排队、越排队越慢」。阈值取实测代理态中位数（约 8s）。
     private static let slowRTT: TimeInterval = 6.5
@@ -1142,36 +1151,31 @@ final class ChapterImageStore: ObservableObject {
     /// 导致 `image(at:)` 看到 inflight 就去死等（→ 30 秒轮询的来源）。
     /// 现在统一走 `image(at:)`，由它来保证去重。
     ///
-    /// ── 第四轮改造（借鉴 Aidoku 的 `ReaderPagePrefetcher`）────────────────
-    /// 在起加载任务之前，先用 Nuke 的 `ImagePrefetcher` 把这批 URL 的**字节**
-    /// 预取进磁盘缓存。好处：
-    ///   · 预取与渲染解耦 —— 用户快速滑动时不会因为「cell 已回收」而白下载
-    ///   · Nuke 的预取器有**自己的并发与优先级调度**，比我们一股脑 `Task{}` 更平滑
-    ///   · 真正显示时 `image(at:)` 命中磁盘缓存，是「本地 IO + 解码」，几十毫秒
+    /// ── 2026-10-17 第五轮改造：**去掉并行的 Nuke 预取器** ────────────────
+    /// 原来这里先 `HMDImagePipeline.prefetcher.startPrefetching(with:)` 预取字节，
+    /// 再起一遍加载任务（「两路并行」）。实测问题：
+    ///   · 两路是**同一批 URL**，虽然 Nuke 会合并同 URL 请求，但预取器先起的那批
+    ///     会额外占连接 → 实际并发可能到「闸门 10 + 预取器 6 = 16」，
+    ///     而图站实测 **18 路就开始丢请求**（15/18 成功）→ 反而拖慢甚至失败。
+    ///   · `startPrefetching` 会把请求优先级**强制改成 prefetcher 的 `.low`**，
+    ///     可视区页面的任务一旦被预取器抢先建出来，就变成低优先级下载。
+    ///   · 我们自己的任务本来就是**非结构化 Task**（存在 `inflight` 里），
+    ///     cell 回收不会取消它 —— 预取器「与渲染解耦」的好处本来就拿到了。
+    /// 现在只保留一条路径：统一走 `image(at:)` + 闸门，优先级可控、并发可控。
     private func runLimited(_ range: [Int]) {
         let pending: [Int]
-        let urls: [String]
         lock.lock()
         pending = range.filter { _urls.indices.contains($0) && _loaded[$0] == nil && !_failed.contains($0) && inflight[$0] == nil }
-        urls = pending.map { _urls[$0] }
         lock.unlock()
         guard !pending.isEmpty else { return }
 
-        // ⓪ 离线章节：本地文件已经在盘上，Nuke 预取毫无意义（还会白白建请求）。
+        // 离线章节：本地文件已经在盘上，直接读。
         if isOffline {
             for j in pending { Task { [weak self] in _ = await self?.image(at: j) } }
             return
         }
 
-        // ① 先用 Nuke 预取字节（不阻塞，内部自有调度）
-        let reqs = urls.compactMap { u -> ImageRequest? in
-            var hh: [String: String] = ["Referer": referer, "User-Agent": ua]
-            for (k, v) in extraHeaders { hh[k] = v }
-            return HMDImagePipeline.request(url: u, referer: referer, ua: ua, headers: hh)
-        }
-        if !reqs.isEmpty { HMDImagePipeline.prefetcher.startPrefetching(with: reqs) }
-
-        // ② 同时起加载任务（走统一闸门）。命中预取结果的会立刻返回。
+        // 起加载任务（走统一闸门）。
         // ⚠️ 预载一律 `.ahead`（低优先级）：这些页在视口之外，不该和可视区抢连接。
         for j in pending {
             Task { [weak self] in
