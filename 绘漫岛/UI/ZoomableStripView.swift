@@ -375,38 +375,59 @@ struct ZoomableStripView: UIViewRepresentable {
             //         → 进度被写成错的页（「进度没保存」）。
             //    另外 `sv.bounds.height == 0` 说明视图还没布局 / 正在被移除，
             //    此时改 offset 只会制造抖动，直接跳过。
-            if oldCum.count == cumY.count, oldTotal != total, oldTop > 0, sv.bounds.height > 0 {
+            // 🔴 2026-10-17：**页数变化时也必须补偿**（用户反馈「打开先出一帧、然后黑屏、
+            //    下滑才正常」的真凶）。
+            //
+            //    原来这里的第一个条件是 `oldCum.count == cumY.count`（页数不变才补偿）。
+            //    但包子漫画这类源是**分页章**：首屏先给 50 页，几秒后再追加到 88/100 页
+            //    （`[metrics] 页数 50 → 88`）。追加那一刻页数变了 → 条件为 false →
+            //    **此后所有高度修正都失去补偿**：图片陆续到达、页高从估算变真实，
+            //    内容在用户眼前整体位移 → 视口落到渲染窗口之外，而窗口外是
+            //    `Color.clear`（= 纯黑）→ 用户看到「一帧图 + 黑屏，滑一下才恢复」。
+            //    真机日志实证：这两次分页章打开**一条 `[fixup]` 都没有**，
+            //    且进度从 `页=1` 弹回 `页=0`。
+            //
+            //    页是**追加**的（index 稳定、不插入不重排），所以用**旧表**定位出的锚点页
+            //    在新表里依然有效 —— 只要它没超出新表长度。
+            if !oldCum.isEmpty, oldTotal != total, oldTop > 0, sv.bounds.height > 0 {
                 let idx = page(at: oldTop, in: oldCum)
-                // 页内偏移原样保留（不要只对齐页顶端，否则页内位置也会跳）
-                let within = max(0, oldTop - oldCum[idx])
-                let newTop = cumY[idx] + min(within, max(heights[idx], 1))
-                // ── 🔴 保险：位移超过「高度表实际变化量 + 一页」就判定为误算 ───────
-                //
-                // ⚠️ 这里以前写的是「超过 3 页就跳过」，**结果把正确补偿也跳掉了**。
-                //    2026-10-13 真机日志实锤（用户反馈「修了没变化」）：
-                //      `⚠️ 补偿被跳过：位移 2195px 超过 3 页上限（页 8，总高 90354→47880）`
-                //      `⚠️ 补偿被跳过：位移 2938px 超过 3 页上限（页 10，总高 90354→40697）`
-                //    总高腰斩 47%（占位比 1.45 → 真实比例 ~0.77），
-                //    **补偿本来就应该是这个量级**。跳过它 → 内容在用户眼前整体上移
-                //    = 「自动往上滑」+「黑屏」，正是没修好的那个 bug。
-                //
-                // 合理的补偿位移只会来自「锚点页**上方**的高度变化」，
-                // 所以位移 > |总高变化| + 一页高 一定是算错了（那是真正该拦住的情况）。
-                let shift = abs(newTop - oldTop)
-                // heights 与 cumY 同源（count = 页数），正常一定非空 —— 但这里仍防一手：
-                // `heights[heights.count - 1]` 在空数组时就是 `heights[-1]`，
-                // Swift 运行时会**直接崩溃**（阅读器里崩一下比坏一点严重得多）。
-                let pageH: CGFloat = heights.isEmpty ? 1 : heights[min(idx, heights.count - 1)]
-                let tableDelta = abs(oldTotal - total) + max(pageH, 1)
-                if shift <= tableDelta {
-                    sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: max(0, newTop * sv.zoomScale))
-                    if shift > 1 {
-                        DiagLog.event("strip", "fixup",
-                                      "补偿 \(Int(oldTop))→\(Int(newTop))（页 \(idx) 移 \(Int(shift))px，总高 \(Int(oldTotal))→\(Int(total))）")
-                    }
-                } else {
+                if idx >= cumY.count || idx >= heights.count {
+                    // 锚点页在新表里不存在（极罕见：章节内容被换掉/页数变少）
                     DiagLog.event("strip", "fixup",
-                                  "⚠️ 补偿被跳过：位移 \(Int(shift))px 超过高度表变化量 \(Int(tableDelta))px（页 \(idx)，总高 \(Int(oldTotal))→\(Int(total))）")
+                                  "⚠️ 补偿跳过：锚点页 \(idx) 超出新高度表（\(cumY.count) 页）")
+                } else {
+                    // 页内偏移原样保留（不要只对齐页顶端，否则页内位置也会跳）
+                    let within = max(0, oldTop - oldCum[idx])
+                    let newTop = cumY[idx] + min(within, max(heights[idx], 1))
+                    // ── 🔴 保险：位移超过「高度表实际变化量 + 一页」就判定为误算 ───
+                    //
+                    // ⚠️ 这里以前写的是「超过 3 页就跳过」，**结果把正确补偿也跳掉了**。
+                    //    2026-10-13 真机日志实锤（用户反馈「修了没变化」）：
+                    //      `⚠️ 补偿被跳过：位移 2195px 超过 3 页上限（页 8，总高 90354→47880）`
+                    //      `⚠️ 补偿被跳过：位移 2938px 超过 3 页上限（页 10，总高 90354→40697）`
+                    //    总高腰斩 47%（占位比 1.45 → 真实比例 ~0.77），
+                    //    **补偿本来就应该是这个量级**。跳过它 → 内容在用户眼前整体上移
+                    //    = 「自动往上滑」+「黑屏」，正是没修好的那个 bug。
+                    //
+                    // 合理的补偿位移只会来自「锚点页**上方**的高度变化」，
+                    // 所以位移 > |总高变化| + 一页高 一定是算错了（那才是该拦的情况）。
+                    let shift = abs(newTop - oldTop)
+                    // heights 与 cumY 同源（count = 页数），正常一定非空 —— 但这里仍防一手：
+                    // `heights[heights.count - 1]` 在空数组时就是 `heights[-1]`，
+                    // Swift 运行时会**直接崩溃**（阅读器里崩一下比坏一点严重得多）。
+                    let pageH: CGFloat = heights.isEmpty ? 1 : heights[min(idx, heights.count - 1)]
+                    let tableDelta = abs(oldTotal - total) + max(pageH, 1)
+                    if shift <= tableDelta {
+                        sv.contentOffset = CGPoint(x: sv.contentOffset.x,
+                                                   y: max(0, newTop * sv.zoomScale))
+                        if shift > 1 {
+                            DiagLog.event("strip", "fixup",
+                                          "补偿 \(Int(oldTop))→\(Int(newTop))（页 \(idx) 移 \(Int(shift))px，总高 \(Int(oldTotal))→\(Int(total))）")
+                        }
+                    } else {
+                        DiagLog.event("strip", "fixup",
+                                      "⚠️ 补偿被跳过：位移 \(Int(shift))px 超过高度表变化量 \(Int(tableDelta))px（页 \(idx)，总高 \(Int(oldTotal))→\(Int(total))）")
+                    }
                 }
             }
 
