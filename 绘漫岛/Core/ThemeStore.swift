@@ -220,16 +220,24 @@ final class ThemeStore: ObservableObject {
     private let currentKey = "hmd.theme.current.v1"
     private let bgDirName = "theme_bg"
 
+    /// 「黑白纸」主题 id。
+    ///
+    /// ⚠️ 它不只是配色 —— 选中它时**书架与详情页会切换成漫画分格版式**
+    ///    （见 `ShelfPanelGrid` / `MangaShelfCell`）。所以它是个「彩蛋主题」：
+    ///    默认不启用，用户自己在主题列表里选才生效（2026-10-18 用户要求）。
+    static let mangaThemeID = "builtin.manga"
+
     private init() {
         load()
-        // 🔎 黑白纸预览（2026-10-18）：首次跑到这版时**强制切到「黑白纸」**，
-        //    好让用户直接看到新设计（否则他手机上存的是旧主题，根本不会变）。
-        //    只切一次 —— 之后用户自己在设置里改主题不会被覆盖。
-        let k = "hmd.bw.preview.v1"
-        if !UserDefaults.standard.bool(forKey: k) {
-            UserDefaults.standard.set(true, forKey: k)
-            if themes.contains(where: { $0.id == "builtin.manga" }) {
-                currentID = "builtin.manga"
+        // 上一版（v102）曾把「黑白纸」**强制**设为当前主题。这一版把它退回默认，
+        // 让用户自己从主题列表里选（彩蛋）。只回退一次，且仅当「是上一版强制的」+
+        // 「现在还停在黑白纸」两个条件同时成立 —— 用户自己选的不会被覆盖。
+        let reverted = "hmd.bw.revert.v1"
+        if !UserDefaults.standard.bool(forKey: reverted) {
+            UserDefaults.standard.set(true, forKey: reverted)
+            if UserDefaults.standard.bool(forKey: "hmd.bw.preview.v1"),
+               currentID == Self.mangaThemeID {
+                currentID = "builtin.light"
             }
         }
     }

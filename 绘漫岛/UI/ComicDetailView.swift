@@ -35,6 +35,10 @@ struct ComicDetailView: View {
     @StateObject private var session: DetailSession
     @State private var ascending = true
     @State private var inShelf = false
+    /// 彩蛋主题「黑白纸」：封面转黑白、直角黑边、按钮墨色
+    @EnvironmentObject private var themeStore: ThemeStore
+
+    private var isManga: Bool { themeStore.currentID == ThemeStore.mangaThemeID }
 
     private var info: ComicInfo? { session.info }
     private var loading: Bool { session.isLoading }
@@ -63,14 +67,17 @@ struct ComicDetailView: View {
                 }
                 if let info {
                     HStack(alignment: .top, spacing: 12) {
-                        // 黑白纸方案：封面转黑白、直角、黑边（不用圆角卡片）
                         CoverImage(url: info.coverUrl)
-                            .grayscale(1)
+                            .grayscale(isManga ? 1 : 0)
                             .frame(width: 110, height: 152)
-                            .clipped()
-                            .overlay(Rectangle().strokeBorder(Color(hex: "#14141A") ?? .black, lineWidth: 1.8))
+                            .clipShape(RoundedRectangle(cornerRadius: isManga ? 0 : 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: isManga ? 0 : 8)
+                                    .strokeBorder(Color(hex: "#14141A") ?? .black,
+                                                  lineWidth: isManga ? 1.8 : 0)
+                            )
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(info.name).font(.system(size: 20, weight: .heavy))
+                            Text(info.name).font(.title3.bold())
                             if !info.author.isEmpty { Text(info.author).font(.subheadline).foregroundStyle(.secondary) }
                             if !info.lastChapter.isEmpty { Text("最新: \(info.lastChapter)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                             if !info.kind.isEmpty {
@@ -93,7 +100,9 @@ struct ComicDetailView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(inShelf ? (Color(hex: "#8E897A") ?? .gray) : (Color(hex: "#14141A") ?? .black))
+                        .tint(isManga
+                              ? (inShelf ? (Color(hex: "#8E897A") ?? .gray) : (Color(hex: "#14141A") ?? .black))
+                              : (inShelf ? .gray : .pink))
                         NavigationLink {
                             // 「开始阅读」的去向：
                             //   ① 有阅读进度 → 直接跳上次那一章那一页
@@ -117,7 +126,7 @@ struct ComicDetailView: View {
                             Label("开始阅读", systemImage: "book").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(Color(hex: "#14141A") ?? .black)
+                        .tint(isManga ? (Color(hex: "#14141A") ?? .black) : .pink)
                         .disabled(info.chapters.isEmpty)
                     }
                     .padding(.horizontal)
