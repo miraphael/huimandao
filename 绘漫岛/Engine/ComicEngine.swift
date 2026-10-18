@@ -1379,12 +1379,19 @@ final class ComicEngine {
             DiagLog.event("detail", "chapterApi", "JSON 路径没命中：\(listPath)")
             return []
         }
-        let nameField = s.ruleChapterName ?? "chapterName"
+        // ⚠️ `ruleChapterName` 通常是给 **HTML** 用的（如 `text` / `tag.a@text`），
+        //    在 JSON 元素上取不到 —— 所以这里做一条**字段名回退链**：
+        //    ruleChapterName → chapterName → name → title。
+        //    （W漫画 的 ruleChapterName 就是 `text`，不兜底会把所有章节都丢掉。）
+        let nameField = s.ruleChapterName ?? ""
         var out: [ComicInfo.Chapter] = []
         var seen = Set<String>()
         for it in items {
             guard let dict = it as? [String: Any] else { continue }
-            let name = JsonPath.asString(dict[nameField] ?? "")
+            var name = nameField.isEmpty ? "" : JsonPath.asString(dict[nameField] ?? "")
+            if name.isEmpty { name = JsonPath.asString(dict["chapterName"] ?? "") }
+            if name.isEmpty { name = JsonPath.asString(dict["name"] ?? "") }
+            if name.isEmpty { name = JsonPath.asString(dict["title"] ?? "") }
             var u = urlTpl
             for (k, v) in dict {
                 u = u.replacingOccurrences(of: "{\(k)}", with: JsonPath.asString(v))
