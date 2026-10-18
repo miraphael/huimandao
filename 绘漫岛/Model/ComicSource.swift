@@ -49,6 +49,14 @@ struct ComicSource: Codable, Identifiable, Hashable {
     var ruleChapterUrlNext: String? = nil
     var ruleChapterParentId: String? = nil
     var ruleChapterParentName: String? = nil
+    /// 章节 API（2026-10-18）：有些站详情页只渲染最近 N 章，「加载更多」是 POST 一个 JSON 接口。
+    /// 例（W漫画）：POST `/comic/{id}`，body `{}` → `{"data":{"chapters":[{id,contentId,chapterName}]}}`
+    /// `{id}` = 详情页 URL 里的数字段（`/comic/9040.html` → 9040）
+    var ruleChapterApi: String? = nil
+    /// 章节数组的 JSON 路径，如 `$.data.chapters[*]`
+    var ruleChapterApiList: String? = nil
+    /// 每章 URL 模板，`{字段名}` 会被 JSON 元素里的同名字段替换，如 `/chapter/{contentId}-{id}.html`
+    var ruleChapterApiUrl: String? = nil
 
     var ruleContentUrl: String? = nil
     var ruleContentUrlNext: String? = nil
@@ -111,6 +119,9 @@ struct ComicSource: Codable, Identifiable, Hashable {
         ruleChapterUrlNext = s(.ruleChapterUrlNext)
         ruleChapterParentId = s(.ruleChapterParentId)
         ruleChapterParentName = s(.ruleChapterParentName)
+        ruleChapterApi = s(.ruleChapterApi)
+        ruleChapterApiList = s(.ruleChapterApiList)
+        ruleChapterApiUrl = s(.ruleChapterApiUrl)
         ruleContentUrl = s(.ruleContentUrl)
         ruleContentUrlNext = s(.ruleContentUrlNext)
         ruleBookContent = s(.ruleBookContent)
@@ -127,6 +138,7 @@ struct ComicSource: Codable, Identifiable, Hashable {
         case ruleBookName, ruleBookAuthor, ruleBookKind, ruleBookLastChapter, ruleBookUrlPattern, ruleIntroduce
         case ruleCoverUrl, ruleCoverDecoder, ruleChapterId, ruleChapterList, ruleChapterName, ruleChapterUrl
         case ruleChapterUrlNext, ruleChapterParentId, ruleChapterParentName, ruleContentUrl, ruleContentUrlNext
+        case ruleChapterApi, ruleChapterApiList, ruleChapterApiUrl
         case ruleBookContent, ruleBookContentDecoder, ruleContentFlow
     }
 

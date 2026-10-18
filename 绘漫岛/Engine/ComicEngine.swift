@@ -1198,6 +1198,15 @@ final class ComicEngine {
             let diagBox = UniversalParser.DiagnosisBox()
             info.chapters = await chapters(source: s, info: info, html: chapHtml, isJson: chapIsJson,
                                            baseUrl: chapBase, skipPagination: skipPagination, diag: diagBox)
+            // 🔴 **章节 API 覆盖**（2026-10-18）：很多站详情页只渲染最近 20~30 章，
+            //    「加载更多」是 POST 一个 JSON 接口（W漫画：POST /comic/{id}）。
+            //    只有拿到**更多**章节时才覆盖，避免 API 抽风把正常结果改坏。
+            let apiChapters = await chaptersFromApi(s, noteUrl: noteUrl, headers: reqHeaders)
+            if apiChapters.count > info.chapters.count {
+                DiagLog.event("detail", "chapterApi",
+                              "用章节 API 覆盖：\(info.chapters.count) → \(apiChapters.count) 章")
+                info.chapters = apiChapters
+            }
             // 万用引擎实际介入时，把「走了哪条策略」记进诊断 —— 用户报「某源不行」时
             // 能一眼看出是规则失效还是兜底生效，而不是靠猜。
             if diagBox.summary != "未记录" {
@@ -1333,6 +1342,60 @@ final class ComicEngine {
             return "第\(n)话"
         }
         return "第\(index + 1)话"
+    }
+
+    /// 从「章节 API」拿全量章节（见 `ComicSource.ruleChapterApi`）。
+    ///
+    /// 适用站点：详情页只渲染最近 N 章，「加载更多」按钮去 POST 一个 JSON 接口。
+    /// 例（W漫画）：`POST /comic/{id}`，body `{}` →
+    /// `{"code":0,"data":{"chapters":[{"id":856484,"contentId":9040,"chapterName":"第01話"}]}}`
+    ///
+    /// 三个字段：`ruleChapterApi`（POST 地址，`{id}` 由详情页 URL 的数字段替换）、
+    /// `ruleChapterApiList`（JSON 路径）、`ruleChapterApiUrl`（每章 URL 模板，
+    /// `{字段名}` 由该 JSON 元素的同名字段替换）。
+    private func chaptersFromApi(_ s: ComicSource, noteUrl: String,
+                                 headers: [String: String]) async -> [ComicInfo.Chapter] {
+        guard let api = s.ruleChapterApi, !api.isEmpty,
+              let listPath = s.ruleChapterApiList, !listPath.isEmpty,
+              let urlTpl = s.ruleChapterApiUrl, !urlTpl.isEmpty else { return [] }
+        // {id} = 详情页 URL 最后一段里的数字（/comic/9040.html → 9040）
+        let tail = noteUrl.split(separator: "/").last.map(String.init) ?? ""
+        let digits = tail.components(separatedBy: CharacterSet.decimalDigits.inverted)
+            .filter { !$0.isEmpty }.first ?? ""
+        guard !digits.isEmpty else { return [] }
+        let apiUrl = api.hasPrefix("http")
+            ? api.replacingOccurrences(of: "{id}", with: digits)
+            : s.bookSourceUrl + api.replacingOccurrences(of: "{id}", with: digits)
+        var h = headers
+        h["Content-Type"] = "application/json"
+        let resp = await HttpFetcher.shared.fetchText(apiUrl, method: "POST", body: "{}",
+                                                      headers: h, timeout: 20)
+        guard let root = JsonPath.parse(resp) else {
+            DiagLog.event("detail", "chapterApi", "响应不是 JSON：\(DiagLog.safeURL(apiUrl))")
+            return []
+        }
+        let items = JsonPath.query(root, listPath)
+        guard !items.isEmpty else {
+            DiagLog.event("detail", "chapterApi", "JSON 路径没命中：\(listPath)")
+            return []
+        }
+        let nameField = s.ruleChapterName ?? "chapterName"
+        var out: [ComicInfo.Chapter] = []
+        var seen = Set<String>()
+        for it in items {
+            guard let dict = it as? [String: Any] else { continue }
+            let name = JsonPath.asString(dict[nameField] ?? "")
+            var u = urlTpl
+            for (k, v) in dict {
+                u = u.replacingOccurrences(of: "{\(k)}", with: JsonPath.asString(v))
+            }
+            guard !name.isEmpty, !u.isEmpty, !u.contains("{") else { continue }
+            let abs = u.hasPrefix("http") ? u : s.bookSourceUrl + u
+            if seen.insert(abs).inserted {
+                out.append(ComicInfo.Chapter(name: Self.cleanChapterName(name), url: abs, group: ""))
+            }
+        }
+        return out
     }
 
     /// 章节列表（含分卷 ruleChapterParentName/Id、下一页 ruleChapterUrlNext）
