@@ -124,8 +124,9 @@ final class ComicRepository {
             RULE_CHAPTER_LIST, RULE_CHAPTER_NAME, RULE_CONTENT_URL, RULE_CONTENT_URL_NEXT,
             RULE_BOOK_CONTENT, RULE_BOOK_CONTENT_DECODER, HTTP_USER_AGENT, RULE_BOOK_KIND,
             RULE_BOOK_LAST_CHAPTER, RULE_BOOK_URL_PATTERN, LOGIN_URL, LOGIN_URL_RESULT, SOURCE_REMARK,
-            HEADER, RULE_CONTENT_FLOW)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            HEADER, RULE_CONTENT_FLOW,
+            RULE_CHAPTER_API, RULE_CHAPTER_API_LIST, RULE_CHAPTER_API_URL)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             s.bookSourceUrl, s.bookSourceType ?? "漫画", s.bookSingleThread ?? "", s.bookDelayTime ?? "",
             s.bookSourceName, s.bookSourceGroup ?? "", s.checkUrl ?? "", s.lastUpdateTime ?? 0,
@@ -144,7 +145,9 @@ final class ComicRepository {
             s.header ?? "",
             // ⚠️ `ruleContentFlow` 同样必须落库（JSON 数组）：不落库就等于导入失败，
             //    卡拉这类多级挑战流站点正文会静默返回空。
-            Self.encodeContentFlow(s.ruleContentFlow))
+            Self.encodeContentFlow(s.ruleContentFlow),
+            // ⚠️ 章节 API 三件套同样必须落库 —— 不落库等于没配（W漫画 章节会停在 24 章）。
+            s.ruleChapterApi ?? "", s.ruleChapterApiList ?? "", s.ruleChapterApiUrl ?? "")
         invalidateSourceCache()
     }
     func saveSources(_ list: [ComicSource]) {
@@ -203,6 +206,9 @@ final class ComicRepository {
         s.ruleIntroduce = row["RULE_INTRODUCE"] as? String
         s.ruleChapterList = row["RULE_CHAPTER_LIST"] as? String
         s.ruleChapterName = row["RULE_CHAPTER_NAME"] as? String
+        s.ruleChapterApi = row["RULE_CHAPTER_API"] as? String
+        s.ruleChapterApiList = row["RULE_CHAPTER_API_LIST"] as? String
+        s.ruleChapterApiUrl = row["RULE_CHAPTER_API_URL"] as? String
         s.ruleContentUrl = row["RULE_CONTENT_URL"] as? String
         s.ruleContentUrlNext = row["RULE_CONTENT_URL_NEXT"] as? String
         s.ruleBookContent = row["RULE_BOOK_CONTENT"] as? String

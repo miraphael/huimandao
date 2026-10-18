@@ -268,6 +268,16 @@ final class Database {
                 execLocked("ALTER TABLE COMIC_SOURCE_BEAN ADD COLUMN RULE_CONTENT_FLOW TEXT")
             }
 
+            // ── 迁移：源表补「章节 API」三列（2026-10-18）──
+            // 和 HEADER / RULE_CONTENT_FLOW 一模一样的坑：模型加了字段、`saveSource`
+            // 的固定列 INSERT 不写它 → 导入「成功」但字段恒为 nil → 章节 API 永远不生效
+            // （W漫画 的章节就会一直停在详情页渲染的那 24 章）。
+            if !columnExistsLocked("COMIC_SOURCE_BEAN", "RULE_CHAPTER_API") {
+                execLocked("ALTER TABLE COMIC_SOURCE_BEAN ADD COLUMN RULE_CHAPTER_API TEXT")
+                execLocked("ALTER TABLE COMIC_SOURCE_BEAN ADD COLUMN RULE_CHAPTER_API_LIST TEXT")
+                execLocked("ALTER TABLE COMIC_SOURCE_BEAN ADD COLUMN RULE_CHAPTER_API_URL TEXT")
+            }
+
             // ── 迁移：下载任务表加**唯一索引**，防僵尸行 ──
             // `TASK_BEAN` 的建表语句没有唯一约束，下载任务的插入路径用的是普通
             // `INSERT` —— 同一本书同一章被反复入队（断点续传、重试、并发调度重叠）
