@@ -16,6 +16,12 @@ struct ReaderSettingsView: View {
                     Text("双页").tag(4); Text("双页·日漫").tag(5)
                 }
                 Toggle("白边裁剪", isOn: $s.whiteEdgeCut)
+                // 章节智能排序（2026-10-18）：按话数升序重排，解决倒序站点
+                // ① 列表反着排 ② 「下一章」往回走 两个问题。
+                Toggle("章节智能排序", isOn: Binding(
+                    get: { AppSettings.shared.chapterAutoSort },
+                    set: { AppSettings.shared.chapterAutoSort = $0 }))
+                    .help("按章节名里的话数升序排列，与站点给的顺序无关")
                 Toggle("双击缩放", isOn: $s.doubleTapZoom)
                 Toggle("常亮", isOn: $s.keepScreenOn)
                 LabeledContent("自动保存进度", value: "始终开启")

@@ -1207,6 +1207,20 @@ final class ComicEngine {
                               "用章节 API 覆盖：\(info.chapters.count) → \(apiChapters.count) 章")
                 info.chapters = apiChapters
             }
+
+            // ── 章节智能排序（2026-10-18）──────────────────────────────────
+            // 很多站的章节是**倒序**（最新话在最前）。原样搬过来会有两个后果：
+            //   ① 详情页/章节列表反着显示；
+            //   ② 阅读器「下一章」按数组顺序取 → 往回走。
+            // 这里统一按话数升序重排，与站点顺序无关（见 `ChapterSorter`）。
+            if AppSettings.shared.chapterAutoSort, info.chapters.count > 1 {
+                let before = info.chapters.first?.name ?? ""
+                info.chapters = ChapterSorter.sort(info.chapters)
+                let after = info.chapters.first?.name ?? ""
+                if before != after {
+                    DiagLog.event("detail", "sort", "章节智能排序：首章「\(before)」→「\(after)」")
+                }
+            }
             // 万用引擎实际介入时，把「走了哪条策略」记进诊断 —— 用户报「某源不行」时
             // 能一眼看出是规则失效还是兜底生效，而不是靠猜。
             if diagBox.summary != "未记录" {

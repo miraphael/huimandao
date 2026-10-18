@@ -28,6 +28,13 @@ final class AppSettings: ObservableObject {
     }
 
     @AppStorage("showRecommend") var showRecommend = true
+
+    /// 章节智能排序（2026-10-18，默认开）
+    ///
+    /// 不少站的章节是**倒序**（最新话在最前）。原样显示会让 ① 列表反着排；
+    /// ② 阅读器「下一章」往回走。开启后按章节名里的**话数升序**重排，
+    /// 与站点顺序无关（见 `ChapterSorter`）。认不出话数的源会自动放弃排序。
+    @AppStorage("chapterAutoSort") var chapterAutoSort = true
     @AppStorage("showFind") var showFind = false        // 原版发现默认隐藏
 
     // ── 安全防护（加固）──────────────────────────────────────────────────
