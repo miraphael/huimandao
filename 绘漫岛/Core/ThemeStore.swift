@@ -178,6 +178,11 @@ extension ThemeConfig {
                     surfaceHex: "#E4F3E5", textHex: "#1B3A1E",
                     backgroundImage: nil, backgroundOpacity: 1, backgroundFill: "fill",
                     builtin: true),
+        ThemeConfig(id: "builtin.manga", name: "黑白纸", isDark: false,
+                    accentHex: "#14141A", backgroundHex: "#F3EEE1",
+                    surfaceHex: "#FAF6EC", textHex: "#14141A",
+                    backgroundImage: nil, backgroundOpacity: 1, backgroundFill: "fill",
+                    builtin: true),
         ThemeConfig(id: "builtin.parchment", name: "羊皮纸", isDark: false,
                     accentHex: "#8D6E63", backgroundHex: "#F5ECD9",
                     surfaceHex: "#FBF4E6", textHex: "#4A3B2A",
@@ -217,6 +222,16 @@ final class ThemeStore: ObservableObject {
 
     private init() {
         load()
+        // 🔎 黑白纸预览（2026-10-18）：首次跑到这版时**强制切到「黑白纸」**，
+        //    好让用户直接看到新设计（否则他手机上存的是旧主题，根本不会变）。
+        //    只切一次 —— 之后用户自己在设置里改主题不会被覆盖。
+        let k = "hmd.bw.preview.v1"
+        if !UserDefaults.standard.bool(forKey: k) {
+            UserDefaults.standard.set(true, forKey: k)
+            if themes.contains(where: { $0.id == "builtin.manga" }) {
+                currentID = "builtin.manga"
+            }
+        }
     }
 
     var current: ThemeConfig {

@@ -63,9 +63,14 @@ struct ComicDetailView: View {
                 }
                 if let info {
                     HStack(alignment: .top, spacing: 12) {
-                        CoverImage(url: info.coverUrl).frame(width: 110, height: 152).clipShape(RoundedRectangle(cornerRadius: 8))
+                        // 黑白纸方案：封面转黑白、直角、黑边（不用圆角卡片）
+                        CoverImage(url: info.coverUrl)
+                            .grayscale(1)
+                            .frame(width: 110, height: 152)
+                            .clipped()
+                            .overlay(Rectangle().strokeBorder(Color(hex: "#14141A") ?? .black, lineWidth: 1.8))
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(info.name).font(.title3.bold())
+                            Text(info.name).font(.system(size: 20, weight: .heavy))
                             if !info.author.isEmpty { Text(info.author).font(.subheadline).foregroundStyle(.secondary) }
                             if !info.lastChapter.isEmpty { Text("最新: \(info.lastChapter)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                             if !info.kind.isEmpty {
@@ -88,7 +93,7 @@ struct ComicDetailView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(inShelf ? .gray : .pink)
+                        .tint(inShelf ? (Color(hex: "#8E897A") ?? .gray) : (Color(hex: "#14141A") ?? .black))
                         NavigationLink {
                             // 「开始阅读」的去向：
                             //   ① 有阅读进度 → 直接跳上次那一章那一页
@@ -112,6 +117,7 @@ struct ComicDetailView: View {
                             Label("开始阅读", systemImage: "book").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(Color(hex: "#14141A") ?? .black)
                         .disabled(info.chapters.isEmpty)
                     }
                     .padding(.horizontal)

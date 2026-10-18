@@ -46,38 +46,15 @@ struct ShelfView: View {
                     if follower.running || updateBadge > 0 || !follower.lastMessage.isEmpty {
                         updateHeader
                     }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 14)], spacing: 16) {
-                        ForEach(shownItems) { item in
-                            // 点击 = 直接续读（对齐安卓 BookShelfFragment.i(int)：
-                            // 后台拉详情+章节 → 直接进阅读器，而不是进简介页）
-                            NavigationLink(value: ShelfRoute.continue_(item)) {
-                                // 传入**整张书架列表**：预取邻居时不必每个 cell 重查全表
-                                ShelfCell(item: item, all: shownItems)
-                            }
-                            .contextMenu {
-                                NavigationLink(value: ShelfRoute.detail(item)) {
-                                    Label("查看详情", systemImage: "info.circle")
-                                }
-                                Menu("移动到分组") {
-                                    Button("未分组") {
-                                        ComicRepository.shared.moveToGroup(noteUrl: item.noteUrl, groupId: 0)
-                                        load()
-                                    }
-                                    ForEach(groups, id: \.id) { g in
-                                        Button(g.name) {
-                                            ComicRepository.shared.moveToGroup(noteUrl: item.noteUrl, groupId: g.id)
-                                            load()
-                                        }
-                                    }
-                                }
-                                Button("移出书架", role: .destructive) {
-                                    ComicRepository.shared.removeFromShelf(noteUrl: item.noteUrl)
-                                    load()
-                                }
-                            }
-                        }
-                    }
-                    .padding()
+                    // ── 黑白纸分格（2026-10-18）──────────────────────────────
+                    // 不再是等宽网格，而是按「行型」循环排布，让分格有大小节奏：
+                    //   型 0：1 大格 + 右侧竖排 2 小格（最像漫画分格）
+                    //   型 1：3 等分
+                    //   型 2：1 通栏
+                    // 竖缝 4pt / 横缝 7pt —— 真实漫画的排版节奏（竖窄横宽）。
+                    ShelfPanelGrid(items: shownItems, groups: groups) { load() }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
                 }
                 // 🔴 ScrollView 显式清底 —— 虽然 ScrollView 默认透明，但它是
                 //    LazyVGrid 的宿主，某些 iOS 版本下 grid 的容器会留下白底。
@@ -205,27 +182,51 @@ struct ShelfCell: View {
     let item: ShelfItem
     /// 整张书架列表（父视图统一读取一次）——预取邻居时用，避免每 cell 全表重查。
     var all: [ShelfItem] = []
+    /// 分格高度：父视图按行型传入（大格高、小格矮 → 分格有节奏）
+    var panelHeight: CGFloat = 140
+
+    /// 墨色 / 纸色（黑白纸方案的两个基色，写死以免被主题色影响观感）
+    private static let ink = Color(hex: "#14141A") ?? .black
+    private static let paper = Color(hex: "#F3EEE1") ?? .white
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ZStack(alignment: .topTrailing) {
-                CoverImage(url: item.coverUrl)
-                    .frame(height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                if item.hasUpdate {
-                    // 显示「N 章」而不是一个红点 —— 用户能一眼看出更新了几话，
-                    // 而不是点进去才知道。数量拿不到时退化成「更新」。
-                    Text(item.newChapterCount > 0 ? "\(item.newChapterCount)章" : "更新")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4).padding(.vertical, 2)
-                        .background(.red, in: Capsule())
-                        .padding(4)
+        ZStack(alignment: .topTrailing) {
+            // 封面**转黑白** —— 漫画本来就是黑白的，彩色封面贴上去会「出戏」
+            CoverImage(url: item.coverUrl)
+                .grayscale(1)
+                .frame(maxWidth: .infinity)
+                .frame(height: panelHeight)
+                .clipped()
+
+            // 书名压在图上，做成漫画的「旁白框」（黑底纸色字），不再是图下一行小字
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                HStack(spacing: 0) {
+                    Text(item.name)
+                        .font(.system(size: 10, weight: .heavy))
+                        .lineLimit(1)
+                        .foregroundStyle(Self.paper)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Self.ink)
+                    Spacer(minLength: 0)
                 }
             }
-            Text(item.name).font(.caption).lineLimit(1)
-            Text(item.durChapterName.isEmpty ? item.lastChapterName : "读到:\(item.durChapterName)")
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+
+            if item.hasUpdate {
+                // 更新角标：黑框小方块（黑白纸方案里不用红色胶囊）
+                Text(item.newChapterCount > 0 ? "\(item.newChapterCount) 新" : "新")
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(Self.paper)
+                    .padding(.horizontal, 4).padding(.vertical, 1.5)
+                    .background(Self.ink)
+                    .padding(3)
+            }
         }
+        .frame(height: panelHeight)
+        .clipped()
+        // 直角 + 黑边（不用圆角卡片、不用阴影）
+        .overlay(Rectangle().strokeBorder(Self.ink, lineWidth: 1.6))
+        .contentShape(Rectangle())
         // 书架是**网格**——一屏可能十几本书。`LazyVGrid` 只创建可视区内 + 少量缓冲的 cell，
         // 用户快速滑动时会看到一片灰底转圈。
         // 这里在 cell 出现时把它后面几本的封面推进 Nuke 预取队列（只写磁盘缓存，
@@ -277,6 +278,159 @@ struct ShelfCell: View {
 ///   · **没有 LRU**：内存字典只增不减，磁盘上每图一个文件不做上限，久了会拖慢 IO。
 /// Nuke 这三件事都是内建的（去重 / 取消 / 双层 LRU），而且和阅读器共用同一份磁盘缓存，
 /// 于是「封面加载出来的图」在进阅读器时可以直接复用。
+// MARK: - 黑白纸分格网格（2026-10-18）
+
+/// 一格分格
+private struct ShelfPanel: Identifiable {
+    let item: ShelfItem
+    let height: CGFloat
+    var id: String { item.noteUrl }
+}
+
+/// 一行里的一个槽位：单个分格，或右侧竖排两格
+private enum ShelfSlot: Identifiable {
+    case single(ShelfPanel, flex: CGFloat)
+    case stack([ShelfPanel], flex: CGFloat)
+
+    var id: String {
+        switch self {
+        case .single(let p, _): return p.id
+        case .stack(let ps, _): return ps.map(\.id).joined(separator: "|")
+        }
+    }
+    var flex: CGFloat {
+        switch self {
+        case .single(_, let f): return f
+        case .stack(_, let f): return f
+        }
+    }
+    var height: CGFloat {
+        switch self {
+        case .single(let p, _): return p.height
+        case .stack(let ps, _):
+            return ps.reduce(CGFloat(0)) { $0 + $1.height } + CGFloat(max(ps.count - 1, 0)) * 4
+        }
+    }
+}
+
+private struct ShelfPanelRow: Identifiable {
+    let id: Int
+    let slots: [ShelfSlot]
+    var height: CGFloat { slots.map(\.height).max() ?? 104 }
+}
+
+/// 黑白纸方案的**分格网格**。
+///
+/// 和原来的 `LazyVGrid` 等宽网格不同，这里按「行型」循环，让分格大小错落：
+///   型 0：1 大格 + 右侧竖排 2 小格（最像漫画分格）
+///   型 1：3 等分
+///   型 2：1 通栏
+/// 竖缝 4pt / 横缝 7pt —— 真实漫画的排版节奏（竖窄横宽）。
+struct ShelfPanelGrid: View {
+    let items: [ShelfItem]
+    /// 分组列表（父视图统一读一次，避免每个分格都查库）
+    var groups: [(id: Int64, name: String)] = []
+    /// 长按菜单里改了分组 / 移出书架后回调（让父视图重新读库）
+    var onChanged: () -> Void
+
+    private let vGap: CGFloat = 4
+    private let hGap: CGFloat = 7
+
+    var body: some View {
+        VStack(spacing: hGap) {
+            ForEach(rows) { row in
+                GeometryReader { geo in
+                    let total = row.slots.reduce(CGFloat(0)) { $0 + $1.flex }
+                    let avail = geo.size.width - vGap * CGFloat(max(row.slots.count - 1, 0))
+                    HStack(spacing: vGap) {
+                        ForEach(row.slots) { slot in
+                            slotView(slot, width: avail * slot.flex / max(total, 1))
+                        }
+                    }
+                }
+                .frame(height: row.height)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func slotView(_ slot: ShelfSlot, width: CGFloat) -> some View {
+        switch slot {
+        case .single(let p, _):
+            link(p).frame(width: width)
+        case .stack(let ps, _):
+            VStack(spacing: vGap) {
+                ForEach(ps) { p in link(p) }
+            }
+            .frame(width: width)
+        }
+    }
+
+    /// 点击 = 直接续读（对齐安卓 BookShelfFragment.i(int)：
+    /// 后台拉详情+章节 → 直接进阅读器，而不是进简介页）
+    @ViewBuilder
+    private func link(_ p: ShelfPanel) -> some View {
+        NavigationLink(value: ShelfRoute.continue_(p.item)) {
+            ShelfCell(item: p.item, all: items, panelHeight: p.height)
+        }
+        .contextMenu {
+            NavigationLink(value: ShelfRoute.detail(p.item)) {
+                Label("查看详情", systemImage: "info.circle")
+            }
+            Menu("移动到分组") {
+                Button("未分组") {
+                    ComicRepository.shared.moveToGroup(noteUrl: p.item.noteUrl, groupId: 0)
+                    onChanged()
+                }
+                ForEach(groups, id: \.id) { g in
+                    Button(g.name) {
+                        ComicRepository.shared.moveToGroup(noteUrl: p.item.noteUrl, groupId: g.id)
+                        onChanged()
+                    }
+                }
+            }
+            Button("移出书架", role: .destructive) {
+                ComicRepository.shared.removeFromShelf(noteUrl: p.item.noteUrl)
+                onChanged()
+            }
+        }
+    }
+
+    /// 把列表切成行（3 / 3 / 1 循环，余数用等分兜底）
+    private var rows: [ShelfPanelRow] {
+        var out: [ShelfPanelRow] = []
+        var i = 0
+        var n = 0
+        while i < items.count {
+            let left = items.count - i
+            switch n % 3 {
+            case 0 where left >= 3:
+                let big = ShelfPanel(item: items[i], height: 176)
+                let a = ShelfPanel(item: items[i + 1], height: 86)
+                let b = ShelfPanel(item: items[i + 2], height: 86)
+                out.append(ShelfPanelRow(id: n, slots: [.single(big, flex: 1.5),
+                                                        .stack([a, b], flex: 1)]))
+                i += 3
+            case 1 where left >= 3:
+                let ps = (0..<3).map { ShelfPanel(item: items[i + $0], height: 104) }
+                out.append(ShelfPanelRow(id: n, slots: ps.map { .single($0, flex: 1) }))
+                i += 3
+            case 2:
+                out.append(ShelfPanelRow(id: n,
+                                         slots: [.single(ShelfPanel(item: items[i], height: 118), flex: 1)]))
+                i += 1
+            default:
+                let take = min(left, 3)
+                let ps = (0..<take).map { ShelfPanel(item: items[i + $0], height: 104) }
+                out.append(ShelfPanelRow(id: n, slots: ps.map { .single($0, flex: 1) }))
+                i += take
+            }
+            n += 1
+        }
+        return out
+    }
+}
+
 struct CoverImage: View {
     let url: String
     /// 防盗链头；留空时由 `ComicRepository` 按域名反查图源的 Referer / UA。
