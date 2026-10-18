@@ -1,74 +1,136 @@
 import Foundation
 
-/// 章节智能排序（2026-10-18）
+/// 章节智能排序（2026-10-18，v111 改版）
 ///
-/// **为什么需要**：不少站的章节列表是**倒序**（最新章节在最前）。我们把站点顺序
-/// 原样搬过来，会导致两件事同时出错：
-///   ① 详情页 / 章节列表**反着显示**（第 121 话在最上面）；
-///   ② 阅读器的「下一章」往**回**走（因为它按数组顺序取下一项）。
-/// 这里改成按章节名里的**话数**升序排，与站点给的顺序无关。
+/// **要解决的两个问题**
+///   ① **倒序站**：不少站的章节列表是「最新章节在最前」。原样搬过来会让
+///      详情页反着显示，更糟的是阅读器「下一章」按数组顺序取 → **往回走**。
+///   ② **番外混进正篇**：`外传：第1话` 也叫「第 1 话」，按话数硬排会被塞到
+///      正篇最前面（实测图库漫画《海贼王》开头变成 外传1/2/3、OP20周年…）。
 ///
-/// 识别规则（按优先级）：
-///   · `15卷番外` / `第3卷` → 卷号（卷内话数为 0，排在该卷正文前）
-///   · `第12話` / `第12话` / `第12章` / `第12回` / `12话` → 12
-///   · `第十二話`（中文数字）→ 12
-///   · 纯数字标题 `12` / `12.5` → 12 / 12.5
-///   · 抽不出数字的（「短篇」「序」）→ **保持原相对顺序**，统一排在最后
+/// ## 做法（两步，都不打乱站点的分组）
 ///
-/// ⚠️ 抽得出数字的章节不足一半时**整体放弃排序**（保持站点原顺序）——
-///    有些源的命名完全没规律，硬排只会更乱。
+/// **第一步：只修方向，不重排内容**
+/// 统计相邻两章的「话数」走向：
+///   · 明显在**递减**（down > up）→ 这是倒序站，整体 `.reversed()`
+///   · 其余情况（递增 / 混杂）→ **原样保留**
+///
+/// 为什么不直接「按话数全排一遍」（v108 的做法）：站点常有分组，
+/// 比如《海贼王》是「第1卷…第160卷」再「第1话…第1168话」，
+/// 全局按数字排会变成 第1卷/第1话/第2卷/第2话… 的交叉乱序。
+/// 只翻转方向就既修正了倒序站，又保住站点自己的分组。
+///
+/// **第二步：番外挪到后面（稳定分区）**
+/// 按 `tier` 做一次**稳定分区**（不改组内相对顺序）：
+///
+/// | tier | 含义 | 例 |
+/// |---|---|---|
+/// | 0 | 正篇（有话数） | `第12话`、`第3卷 第5话` |
+/// | 1 | 番外类（名字带番外标记） | `外传：第1话`、`15卷番外`、`特别篇 第2话` |
+/// | 2 | 抽不出话数 | `小剧场RPG`、`序` |
+///
+/// ⚠️ 抽得出数字的章节不足一半时**整体放弃**（保持站点原顺序）——
+///    命名完全没规律的源，任何重排都只会更乱。
 enum ChapterSorter {
 
-    struct Key: Comparable {
-        let volume: Int
-        let number: Double
-        let hasNumber: Bool
-        /// 原始下标 —— 用于「抽不出数字」时的稳定排序
+    struct Key {
+        /// 0 正篇 / 1 番外类 / 2 抽不出话数
+        let tier: Int
+        /// 抽到的话数（卷号也折算进来），抽不到为 nil
+        let number: Double?
+        /// 原始下标
         let original: Int
 
-        static func < (a: Key, b: Key) -> Bool {
-            if a.hasNumber != b.hasNumber { return a.hasNumber && !b.hasNumber }
-            if a.volume != b.volume { return a.volume < b.volume }
-            if a.number != b.number { return a.number < b.number }
-            return a.original < b.original
-        }
+        var hasNumber: Bool { number != nil }
     }
 
-    /// 升序排序（只调顺序，不改内容）
+    /// 排序入口（只调顺序，不改内容）
     static func sort(_ chapters: [ComicInfo.Chapter]) -> [ComicInfo.Chapter] {
         guard chapters.count > 1 else { return chapters }
         let keys = chapters.enumerated().map { idx, ch in key(for: ch.name, original: idx) }
         let withNumber = keys.filter { $0.hasNumber }.count
-        // 能认出话数的不到一半 → 这个源命名不规律，别乱排
+        // 能认出话数的不到一半 → 这个源命名不规律，别动
         guard withNumber * 2 >= chapters.count else { return chapters }
-        return zip(chapters, keys).sorted { $0.1 < $1.1 }.map { $0.0 }
+
+        // ── 第一步：方向修正（只翻转，不重排）────────────────────────────
+        var up = 0, down = 0
+        var prev: Double? = nil
+        for k in keys {
+            guard let n = k.number else { continue }
+            if let p = prev {
+                if n > p { up += 1 } else if n < p { down += 1 }
+            }
+            prev = n
+        }
+        var ordered = chapters
+        if down > up {
+            ordered = Array(chapters.reversed())
+            DiagLog.event("sort", "reverse", "章节列表是倒序（down=\(down) up=\(up)），已整体翻转")
+        }
+
+        // ── 第二步：番外类 / 无话数 挪到后面（稳定分区）────────────────────
+        // 注意：key 必须按**翻转后**的顺序重算（original 用新下标），
+        // 否则分区时会把刚翻转好的顺序又按旧下标拉回去。
+        let newKeys = ordered.enumerated().map { idx, ch in key(for: ch.name, original: idx) }
+        let out = zip(ordered, newKeys)
+            .sorted { a, b in
+                if a.1.tier != b.1.tier { return a.1.tier < b.1.tier }
+                return a.1.original < b.1.original
+            }
+            .map { $0.0 }
+        if out.map(\.url) != ordered.map(\.url) {
+            DiagLog.event("sort", "tier", "番外/无话数章节已挪到列表末尾")
+        }
+        return out
+    }
+
+    // MARK: - 番外标记
+
+    /// 名字里出现这些词 → 归到「番外类」（tier 1），排到正篇之后。
+    ///
+    /// ⚠️ 只收**明确的番外词**，不要收裸「特别」——
+    ///    实测《海贼王》有一话叫「第738话 托雷波尔军 **特别**干部砂糖」，
+    ///    收裸「特别」会把正篇第 738 话扔进番外区。
+    private static let extraMarkers = [
+        "外传", "外傳", "番外", "特别篇", "特別篇", "小剧场", "小劇場",
+        "剧场版", "劇場版", "设定集", "設定集", "附录", "附錄", "后记", "後記",
+        "彩蛋", "特典", "短篇", "总集篇", "總集篇",
+    ]
+
+    static func isExtra(_ name: String) -> Bool {
+        extraMarkers.contains { name.contains($0) }
     }
 
     // MARK: - 解析
 
     static func key(for name: String, original: Int) -> Key {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !n.isEmpty else { return Key(volume: 0, number: 0, hasNumber: false, original: original) }
+        guard !n.isEmpty else { return Key(tier: 2, number: nil, original: original) }
+        let tier = isExtra(n) ? 1 : 0
 
-        // ① 带「卷」的：卷号优先，卷内再按话数
+        // ① 「第3卷 第5话」→ 卷号×10000 + 话数，保证卷序主导、卷内按话
+        if let v = firstInt(n, pattern: "(\\d+)\\s*卷"),
+           let inner = firstDouble(n, pattern: "第?\\s*(\\d+(?:\\.\\d+)?)\\s*[话話章回]") {
+            return Key(tier: tier, number: Double(v) * 10_000 + inner, original: original)
+        }
+        // ② 只有卷号（`第12卷`）→ 当成话数用（与「第N话」同一量纲）
         if let v = firstInt(n, pattern: "(\\d+)\\s*卷") {
-            let inner = firstDouble(n, pattern: "第?\\s*(\\d+(?:\\.\\d+)?)\\s*[话話章回]") ?? 0
-            return Key(volume: v, number: inner, hasNumber: true, original: original)
+            return Key(tier: tier, number: Double(v), original: original)
         }
-        // ② 阿拉伯数字 + 话/章/回
+        // ③ 阿拉伯数字 + 话/章/回
         if let x = firstDouble(n, pattern: "第?\\s*(\\d+(?:\\.\\d+)?)\\s*[话話章回]") {
-            return Key(volume: 0, number: x, hasNumber: true, original: original)
+            return Key(tier: tier, number: x, original: original)
         }
-        // ③ 中文数字 + 话/章/回
+        // ④ 中文数字 + 话/章/回
         if let s = firstGroup(n, pattern: "第?\\s*([零一二三四五六七八九十百]+)\\s*[话話章回]"),
            let x = chineseNumber(s) {
-            return Key(volume: 0, number: Double(x), hasNumber: true, original: original)
+            return Key(tier: tier, number: Double(x), original: original)
         }
-        // ④ 纯数字标题
+        // ⑤ 纯数字标题
         if let x = Double(n) {
-            return Key(volume: 0, number: x, hasNumber: true, original: original)
+            return Key(tier: tier, number: x, original: original)
         }
-        return Key(volume: 0, number: 0, hasNumber: false, original: original)
+        return Key(tier: 2, number: nil, original: original)
     }
 
     /// 「一」..「九百九十九」→ 整数
