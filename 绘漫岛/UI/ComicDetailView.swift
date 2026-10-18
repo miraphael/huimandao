@@ -327,6 +327,9 @@ struct ChapterListView: View {
     @State private var downloadMsg: String? = nil
     /// 已下载（离线可读）的章节 URL 集合 —— 用于打角标 / 提供删除入口
     @State private var downloaded: Set<String> = []
+    /// 彩蛋主题「黑白纸」：行间改**细线分隔**（替代系统分隔线）
+    @EnvironmentObject private var themeStore: ThemeStore
+    private var isManga: Bool { themeStore.currentID == ThemeStore.mangaThemeID }
 
     var body: some View {
         List(info.chapters.reversed(), selection: $selection) { ch in
@@ -334,15 +337,25 @@ struct ChapterListView: View {
                 ReaderView(info: info, startChapter: ch,
                            startPage: ResumeLocator.page(for: ch, info: info, progress: resumeProgress))
             } label: {
-                HStack(spacing: 6) {
-                    Text(ch.name).font(.callout)
-                    Spacer(minLength: 4)
-                    if downloaded.contains(ch.url) {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.caption2).foregroundStyle(.green)
+                VStack(spacing: 0) {
+                    HStack(spacing: 6) {
+                        Text(ch.name).font(.callout)
+                        Spacer(minLength: 4)
+                        if downloaded.contains(ch.url) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.caption2).foregroundStyle(.green)
+                        }
+                    }
+                    // 黑白纸主题：0.8pt 细线（漫画的分格线）
+                    if isManga {
+                        Rectangle()
+                            .fill((Color(hex: "#14141A") ?? .black).opacity(0.30))
+                            .frame(height: 0.8)
+                            .padding(.top, 7)
                     }
                 }
             }
+            .listRowSeparator(isManga ? .hidden : .automatic)
             // ⚠️ 本页长期处于 editMode(.active)，`swipeActions` 在编辑模式下不生效，
             //    所以删除入口用长按 contextMenu 而不是侧滑。
             .contextMenu {

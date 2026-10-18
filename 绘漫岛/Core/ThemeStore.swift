@@ -582,6 +582,49 @@ extension Color {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// 通路 A：SwiftUI 内的主题背景。
+/// 彩蛋主题「黑白纸」的**网点 + 纸纹**叠加层（2026-10-18）
+///
+/// 用一张 16×16 的小图**平铺**，而不是每帧用 `Canvas` 画点阵 ——
+/// 平铺是 GPU 上一个纹理采样，滚动时几乎零成本；Canvas 每帧重画会掉帧。
+///
+/// 内容两层：
+///   · **纸纹**：固定伪随机的深浅小颗粒（每次生成一样，不会「闪」）
+///   · **网点**：4pt 网格上的 1px 点，模拟印刷网点
+enum MangaPaperTexture {
+    static let tile: UIImage = makeTile()
+
+    private static func makeTile() -> UIImage {
+        let n: CGFloat = 16
+        let fmt = UIGraphicsImageRendererFormat.default()
+        fmt.scale = 1                 // 1x 就够（要的就是颗粒感），也省内存
+        fmt.opaque = false
+        return UIGraphicsImageRenderer(size: CGSize(width: n, height: n), format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            // 纸纹颗粒（固定种子 → 每次一样）
+            var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+            for _ in 0..<52 {
+                seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                let x = CGFloat((seed >> 33) % 16)
+                let y = CGFloat((seed >> 41) % 16)
+                let a = 0.05 + CGFloat((seed >> 49) % 100) / 100 * 0.11
+                cg.setFillColor(UIColor(red: 0.34, green: 0.27, blue: 0.17, alpha: a).cgColor)
+                cg.fill(CGRect(x: x, y: y, width: 1, height: 1))
+            }
+            // 网点
+            cg.setFillColor(UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 0.055).cgColor)
+            var i: CGFloat = 2
+            while i < 16 {
+                var j: CGFloat = 2
+                while j < 16 {
+                    cg.fill(CGRect(x: i, y: j, width: 1, height: 1))
+                    j += 4
+                }
+                i += 4
+            }
+        }
+    }
+}
+
 struct ThemeBackground: View {
     let theme: ThemeConfig
     /// 覆盖背景色（阅读器需要「纯色背景」时用，不显示图）
@@ -608,6 +651,13 @@ struct ThemeBackground: View {
                         .clipped()
                         .opacity(theme.backgroundOpacity)
                         .blur(radius: theme.backgroundBlur)
+                        .allowsHitTesting(false)
+                }
+                // 彩蛋主题「黑白纸」：网点 + 纸纹平铺（其它主题不加）
+                if !solidOnly, theme.id == ThemeStore.mangaThemeID {
+                    Image(uiImage: MangaPaperTexture.tile)
+                        .resizable(resizingMode: .tile)
+                        .frame(width: w, height: h)
                         .allowsHitTesting(false)
                 }
             }
