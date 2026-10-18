@@ -128,6 +128,31 @@ enum HMDImagePipeline {
         ImagePipeline.shared = shared
     }
 
+    /// 把 URL 里的**非 ASCII 字符**（中文路径、全角符号）逐字节百分号编码。
+    ///
+    /// 为什么需要：`URLComponents(string:)` 对含中文的路径在 iOS 16 上返回 nil
+    /// （iOS 17 起才宽松），结果就是**图片永远加载不出来**，而日志里只有一句
+    /// 「请求构造失败」，极难定位。
+    /// 图库漫画（tuku.cc）的图床路径就是中文：`/h/海贼王[one_piece]/…`。
+    ///
+    /// ⚠️ 只编码 >127 的字符，ASCII 原样保留 —— 这样 `[` `]` `?` `&` `#`
+    ///    这些**对站点有意义**的符号不会被误伤（该站路径里就带方括号）。
+    static func asciiEncoded(_ s: String) -> String {
+        guard s.unicodeScalars.contains(where: { $0.value > 127 }) else { return s }
+        var out = String()
+        out.reserveCapacity(s.count * 3)
+        for ch in s {
+            if ch.isASCII {
+                out.append(ch)
+            } else {
+                for byte in String(ch).utf8 {
+                    out += String(format: "%%%02X", byte)
+                }
+            }
+        }
+        return out
+    }
+
     /// 构造带自定义头的图片请求。
     ///
     /// - Parameters:
@@ -142,7 +167,7 @@ enum HMDImagePipeline {
     static func request(url: String, referer: String = "", ua: String = "",
                         headers: [String: String] = [:],
                         priority: ImageRequest.Priority = .normal) -> ImageRequest? {
-        guard var comp = URLComponents(string: url), comp.scheme != nil else { return nil }
+        guard var comp = URLComponents(string: asciiEncoded(url)), comp.scheme != nil else { return nil }
         // 把中文/空格等转义，避免 URL(string:) 返回 nil
         comp.percentEncodedQuery = comp.percentEncodedQuery?
             .replacingOccurrences(of: " ", with: "%20")
