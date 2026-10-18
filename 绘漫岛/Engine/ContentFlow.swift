@@ -69,6 +69,12 @@ struct ContentFlowStep: Codable, Hashable {
         var regex: String? = nil          // 在输入文本上跑正则，收集第 1 捕获组
         var rule: String? = nil           // legado 规则（AnalyzeRule），取图片列表
         var base: String? = nil           // 相对图地址的解析基址；默认上一请求 URL
+        /// **生成式**出图：模板里的 `{i}` 会被 1...count 依次替换。
+        /// 用于「正文图是 JS 拼出来的」站点（HTML 里根本没有 `<img src>`），
+        /// 例如 W漫画：`var num=eval("54"); var pasd="…/"; pasd + i + ".webp"`。
+        var template: String? = nil
+        /// 张数（支持 `{num}` 这类变量引用）
+        var count: String? = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -177,6 +183,19 @@ enum ContentFlowEngine {
                     for m in Self.allMatches(regex, in: context) where !m.isEmpty {
                         if m.hasPrefix("data:") { continue }
                         let abs = Self.resolve(m, base: base)
+                        if !urls.contains(abs) { urls.append(abs) }
+                    }
+                } else if let tpl = sel.template, !tpl.isEmpty,
+                          let cntRaw = sel.count,
+                          let n = Int(Self.substitute(cntRaw, vars: vars)
+                                      .trimmingCharacters(in: .whitespacesAndNewlines)),
+                          n > 0 {
+                    // 生成式：按模板逐张拼地址（1...n）。上限 500 张，防正则抽错时失控。
+                    var v = vars
+                    for i in 1...min(n, 500) {
+                        v["i"] = String(i)
+                        let u = Self.substitute(tpl, vars: v)
+                        let abs = u.hasPrefix("http") ? u : Self.resolve(u, base: base)
                         if !urls.contains(abs) { urls.append(abs) }
                     }
                 } else if let rule = sel.rule, !rule.isEmpty {
