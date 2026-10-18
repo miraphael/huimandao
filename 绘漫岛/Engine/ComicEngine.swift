@@ -1585,8 +1585,17 @@ final class ComicEngine {
         // 这里**绕开规则**，直接从已解析好的文档里扫「href 含 chapter 的链接」。
         // 只在本页一条都没解析出来时触发，不会覆盖规则已成功的结果。
         // （2026-10-15 真机实锤：瓜子漫画章节列表变成 HTML 源码。）
-        if list.count == baseIndex, let root = a.ctx.element {
-            var seenFallback = Set<String>()
+        // 🔴 **只在「本页一条都没解析出来」时才兜底**，且去重要带上已有章节。
+        //
+        //    真机实测（2026-10-18，v111）：翻到第 2 页时本页 0 条新章节 →
+        //    `list.count == baseIndex` 成立 → 兜底把**第 2 页 HTML 里的全部**
+        //    `<a href*=chapter>` 又扫了一遍，而 `seenFallback` 是个**空集合**
+        //    （没有带上 list 里已有的 URL）→ 整份章节被**再追加一遍**：
+        //      《海贼王》1034 章 → 2068 章；瓜子 1068 → 2136；卡拉 919 → 2650。
+        //    用户看到的就是「章节列表里每话都有两份」。
+        if list.count == baseIndex, collected.isEmpty, let root = a.ctx.element {
+            // 已有章节的 URL 先灌进去，兜底不可能产出重复项
+            var seenFallback = Set(list.map(\.url))
             let buttonNames: Set<String> = ["开始阅读", "阅读", "立即阅读", "上一章",
                                             "下一章", "返回", "目录", "首页"]
             if let els = try? root.select("a[href*=chapter]") {
@@ -1701,7 +1710,14 @@ final class ComicEngine {
            PagingStrategyResolver.canScanLinks(isHTML: !isJson),
            let nx = Self.findNextLink(html, baseUrl: baseUrl, currentPage: page),
            let nu = URL(string: nx), nu.absoluteString != baseUrl {
-            discoveredNext = nu.absoluteString
+            // 🔴 「下一页」如果**本身就在章节列表里**，那它是章节链接（比如详情页底部的
+            //    「开始阅读」按钮），不是分页链接 —— 跟过去只会把同一份章节再抓一遍。
+            if list.contains(where: { $0.url == nu.absoluteString }) {
+                DiagLog.event("chapters", "paging",
+                              "跳过伪分页链接（就是一章）：\(DiagLog.safeURL(nu.absoluteString))")
+            } else {
+                discoveredNext = nu.absoluteString
+            }
         }
 
         // 记录本页进度并推进游标（itemIDs 供未来「连续无进展」终止；当前阈值很高=不提前停）
