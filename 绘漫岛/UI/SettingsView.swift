@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import Network
 
 /// 设置 —— 首页
@@ -166,6 +167,23 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button {
+                        joinQQGroup()
+                    } label: {
+                        HStack {
+                            Label("加入 QQ 群", systemImage: "person.3.fill")
+                            Spacer()
+                            Text(Self.qqGroup).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                } header: {
+                    Label("社区", systemImage: "bubble.left.and.bubble.right.fill")
+                } footer: {
+                    Text("遇到问题、想提需求、或者想分享图源，都可以进群聊。点这一行会直接打开 QQ 的加群页面。")
+                }
+
+                Section {
                     NavigationLink {
                         AboutView()
                     } label: {
@@ -201,6 +219,44 @@ struct SettingsView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .hmdAccountChanged)) { _ in
                 acc = AccountStore.load()
+            }
+        }
+    }
+
+    // MARK: - QQ 群（2026-10-18）
+
+    /// 官方交流群号
+    static let qqGroup = "1129980979"
+
+    /// 打开 QQ 的**加群页面**。
+    ///
+    /// 优先用 QQ 的 URL Scheme 直接跳「群资料卡」（用户点一下就能申请加入）：
+    ///   `mqqapi://card/show_pslcard?src_type=internal&version=1&uin=<群号>&card_type=group`
+    /// 两个 scheme 依次试（mqqapi 是 QQ 的通用 scheme，mqq 是老版本兜底）。
+    /// 都没成功（没装 QQ）→ 复制群号并提示，**不把用户丢去 App Store**。
+    private func joinQQGroup() {
+        let g = Self.qqGroup
+        let schemes = [
+            "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=\(g)&card_type=group&source=qrcode",
+            "mqq://card/show_pslcard?src_type=internal&version=1&uin=\(g)&card_type=group"
+        ]
+        openFirst(schemes) {
+            UIPasteboard.general.string = g
+            let av = UIAlertController(title: "没找到 QQ",
+                                       message: "群号 \(g) 已复制到剪贴板，打开 QQ 粘贴搜索就能加入。",
+                                       preferredStyle: .alert)
+            av.addAction(UIAlertAction(title: "好", style: .cancel))
+            UIApplication.shared.topViewController()?.present(av, animated: true)
+        }
+    }
+
+    /// 依次尝试打开一串 URL，全失败才调用 `fallback`
+    private func openFirst(_ urls: [String], fallback: @escaping () -> Void) {
+        guard let s = urls.first, let url = URL(string: s) else { fallback(); return }
+        UIApplication.shared.open(url, options: [:]) { ok in
+            if ok { return }
+            DispatchQueue.main.async {
+                self.openFirst(Array(urls.dropFirst()), fallback: fallback)
             }
         }
     }
