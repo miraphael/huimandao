@@ -531,6 +531,27 @@ final class ComicRepository {
         Database.shared.exec("UPDATE COMIC_SHELF_BEAN SET GROUP_ID=? WHERE NOTE_URL=?", groupId, noteUrl)
     }
 
+    /// 删除分组（2026-10-19）。
+    ///
+    /// ⚠️ **只删分组、不删漫画** —— 用户点「删除分组」的预期是「这个分类不要了」，
+    ///    不是「把里面的书一起删掉」。所以先把组里的书**移回「未分组」**
+    ///    （`GROUP_ID=0`），再删分组行。
+    ///
+    /// - Returns: 被移到「未分组」的漫画数（用于给用户看提示）
+    @discardableResult
+    func deleteGroup(id: Int64) -> Int {
+        let rows = Database.shared.query(
+            "SELECT COUNT(*) AS C FROM COMIC_SHELF_BEAN WHERE GROUP_ID=?", [id])
+        let moved: Int
+        if let v = rows.first?["C"] as? Int64 { moved = Int(v) }
+        else if let v = rows.first?["C"] as? Int { moved = v }
+        else { moved = 0 }
+        Database.shared.exec("UPDATE COMIC_SHELF_BEAN SET GROUP_ID=0 WHERE GROUP_ID=?", id)
+        Database.shared.exec("DELETE FROM COMIC_SHELF_GROUP_BEAN WHERE _ID=?", id)
+        DiagLog.event("shelf", "group", "删除分组 id=\(id)，\(moved) 本移到未分组")
+        return moved
+    }
+
     func setAllSourcesEnabled(_ enabled: Bool) {
         Database.shared.exec("UPDATE COMIC_SOURCE_BEAN SET ENABLE=?", enabled ? 1 : 0)
         invalidateSourceCache()
