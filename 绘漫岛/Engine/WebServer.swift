@@ -59,6 +59,9 @@ final class WebServer {
         return diff == 0
     }
 
+    /// 单次请求体的硬上限（见 body 处的说明）
+    static let maxBodyBytes = 8 * 1024 * 1024
+
     static var token: String {
         let key = "hmd_web_token"
         if let v = UserDefaults.standard.string(forKey: key), v.count >= 8 { return v }
@@ -128,6 +131,18 @@ final class WebServer {
         let path = String(rawPath.split(separator: "?").first ?? "/")
         let query = rawPath.contains("?") ? String(rawPath.split(separator: "?", maxSplits: 1)[1]) : ""
         let bodyStart = request.range(of: Data("\r\n\r\n".utf8))?.upperBound ?? request.count
+        // 🔴 POST body 上限（2026-10-19 安全加固）：
+        //    这个服务监听 0.0.0.0，同一局域网内**知道令牌**的对端可以 POST 一个
+        //    几百 MB 的 body 把 App 内存打满（`request` 已经是整包读进内存的）。
+        //    图源 JSON 正常几 KB ~ 几百 KB，8MB 非常宽松。
+        let bodyBytes = request.count - bodyStart
+        guard bodyBytes <= Self.maxBodyBytes else {
+            DiagLog.event("web", "oversize", "请求体 \(bodyBytes / 1_048_576)MB 超上限，已拒绝")
+            respond(conn, status: "413 Payload Too Large",
+                    contentType: "application/json; charset=utf-8",
+                    data: Data(#"{"isOk":false,"msg":"请求体过大"}"#.utf8))
+            return
+        }
         let body = String(data: request[bodyStart...], encoding: .utf8) ?? ""
         // POST body 可能是 form: postData=xxx
         var payload = body

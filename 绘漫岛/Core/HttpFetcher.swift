@@ -259,6 +259,14 @@ final class HttpFetcher {
         return values.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
     }
 
+    /// 单次响应体的**硬上限**（2026-10-19 安全加固）。
+    ///
+    /// 为什么需要：站点（或被劫持的 DNS / 中间人）返回一个几百 MB 的响应时，
+    ///   ① `URLSession` 会把它整个读进内存 → 内存暴涨；
+    ///   ② 更致命的是后续**正则在几百 MB 的字符串上跑**，CPU 直接打满、App 卡死。
+    ///   正常漫画站 HTML 1~2MB，漫画 JSON 也远小于此，16MB 足够宽松。
+    static let maxResponseBytes = 16 * 1024 * 1024
+
     func fetchData(_ url: String, method: String = "GET", body: String? = nil, headers: [String: String] = [:], timeout: TimeInterval? = nil) async -> Data {
         await fetchDataWithResponse(url, method: method, body: body, headers: headers, timeout: timeout).data
     }
@@ -306,7 +314,15 @@ final class HttpFetcher {
         if let b = body { req.httpBody = Data(b.utf8) }
 
         do {
-            let (data, resp) = await performWithRoute(req, host: host)
+            let (rawData, resp) = await performWithRoute(req, host: host)
+            // 🔴 响应体上限（见 `maxResponseBytes`）：超限截断并记诊断，
+            //    避免「内存暴涨 + 正则在巨串上跑」把 App 卡死。
+            var data = rawData
+            if data.count > Self.maxResponseBytes {
+                DiagLog.event("net", "oversize",
+                              "响应体 \(data.count / 1_048_576)MB 超上限，已截断：\(url.prefix(60))")
+                data = Data(data.prefix(Self.maxResponseBytes))
+            }
             // 🔴 302/301 重定向**终址复检** —— `URLSession` 默认自动跟重定向，
             //    而 `JsoupConn.isAllowed` 只校验**初始 URL**：`https://allowed.com`
             //    302 到 `https://evil.com` 时，evil 的响应体会原样返回给 JS 脚本

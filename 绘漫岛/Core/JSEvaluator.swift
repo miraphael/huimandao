@@ -11,7 +11,9 @@ final class JSEvaluator {
     /// 同步表达式求值（URL 规则 {{js}}、头部日期签名等）；返回脚本完成值
     /// 注意：必须用 setObject(forKeyedSubscript:)，setValue:forKey: 对不存在的键会抛 NSUnknownKeyException
     func evaluateExpression(_ code: String, vars: [String: String]) -> String {
-        let ctx = JSContext()!
+        // ⚠️ 不用 `JSContext()!`：极端内存压力下它会返回 nil，
+        //    强制解包 = 直接闪退（这类崩溃无法被上层 catch）。
+        guard let ctx = JSContext() else { return "" }
         ctx.exceptionHandler = { _, _ in }
         ctx.evaluateScript(Self.jsoupPrologue)
         for (k, v) in vars { ctx.setObject(v, forKeyedSubscript: k as NSString) }
@@ -188,7 +190,9 @@ extension JSEvaluator {
                               variables: [String: String], headers: [String: String],
                               resultAsObject: Bool, resultBytes: [UInt8]?,
                               allowedDomains: Set<String>?) -> JSOutcome {
-        let ctx = JSContext()!
+        // ⚠️ 不用 `JSContext()!`：极端内存压力下它会返回 nil，
+        //    强制解包 = 直接闪退（这类崩溃无法被上层 catch）。
+        guard let ctx = JSContext() else { return JSOutcome(error: "JSContext 创建失败（内存不足）") }
         ctx.exceptionHandler = { _, _ in /* 静默：与原版 Rhino 出错返回空一致 */ }
         if let bytes = resultBytes {
             // byte[] → JS 普通数组（Number[]）。Java 的 `result.length` / 下标访问才能用。
