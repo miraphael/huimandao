@@ -19,8 +19,8 @@ struct ShelfView: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @State private var showNewGroup = false
     @State private var newGroupName = ""
-    /// 待删除的分组（非 nil 就弹确认框）—— 2026-10-19 用户要求「分组要能删」
-    @State private var deletingGroup: GroupRef? = nil
+    /// 分组管理页（左滑删除分组的地方）—— 菜单里没法左滑，所以给它一个正经列表页
+    @State private var showManageGroups = false
 
     var body: some View {
         if embedded {
@@ -121,17 +121,11 @@ struct ShelfView: View {
                     }
                     Divider()
                     Button("新建分组…") { showNewGroup = true }
-                    if !groups.isEmpty {
-                        // 删除分组：只删分类，组里的书会移回「未分组」（见 deleteGroup 注释）
-                        Menu("删除分组") {
-                            ForEach(groups, id: \.id) { g in
-                                Button(role: .destructive) {
-                                    deletingGroup = GroupRef(id: g.id, name: g.name)
-                                } label: {
-                                    Text(g.name)
-                                }
-                            }
-                        }
+                    // 删除分组改到这里：菜单里没有「左滑」，所以分组要有个列表页
+                    Button {
+                        showManageGroups = true
+                    } label: {
+                        Label("管理分组…", systemImage: "folder.badge.minus")
                     }
                 } label: {
                     Label(groups.first(where: { $0.id == selectedGroup })?.name ?? "分组", systemImage: "folder.badge.plus")
@@ -175,21 +169,15 @@ struct ShelfView: View {
             }
             Button("取消", role: .cancel) {}
         }
-        // 删除分组确认 —— 明确告诉用户「书不会没」，这是最容易误解的一步
-        .alert("删除分组「\(deletingGroup?.name ?? "")」？",
-               isPresented: Binding(get: { deletingGroup != nil },
-                                    set: { if !$0 { deletingGroup = nil } })) {
-            Button("删除", role: .destructive) {
-                guard let g = deletingGroup else { return }
-                _ = ComicRepository.shared.deleteGroup(id: g.id)
-                // 当前正筛着这个分组 → 回到「全部」，否则书架会空一片
-                if selectedGroup == g.id { selectedGroup = nil }
-                deletingGroup = nil
-                load()
-            }
-            Button("取消", role: .cancel) { deletingGroup = nil }
-        } message: {
-            Text("组里的漫画会移到「未分组」，不会被删除。")
+        // 分组管理页（左滑删除）
+        .sheet(isPresented: $showManageGroups) {
+            GroupManageView(groups: groups,
+                            selectedGroup: selectedGroup,
+                            onSelect: { gid in
+                                selectedGroup = gid
+                                load()
+                            },
+                            onChanged: { load() })
         }
         .onAppear {
             load()
@@ -239,12 +227,6 @@ struct ShelfView: View {
         }
         .padding(.horizontal).padding(.top, 8)
     }
-}
-
-/// 待删除的分组引用（给确认弹窗用；`Identifiable` 便于 ForEach）
-private struct GroupRef: Identifiable {
-    let id: Int64
-    let name: String
 }
 
 struct ShelfCell: View {

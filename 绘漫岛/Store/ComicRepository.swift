@@ -515,6 +515,22 @@ final class ComicRepository {
         }
     }
 
+    /// 每个分组里的漫画数（分组管理页显示「N 本」用）。
+    /// 一次 `GROUP BY` 查完，不要每行单独 count（分组多时会卡）。
+    func groupCounts() -> [Int64: Int] {
+        var out: [Int64: Int] = [:]
+        for row in Database.shared.query(
+            "SELECT GROUP_ID, COUNT(*) AS C FROM COMIC_SHELF_BEAN GROUP BY GROUP_ID") {
+            let gid = row["GROUP_ID"] as? Int64 ?? 0
+            let c: Int
+            if let v = row["C"] as? Int64 { c = Int(v) }
+            else if let v = row["C"] as? Int { c = v }
+            else { c = 0 }
+            out[gid] = c
+        }
+        return out
+    }
+
     func createGroup(name: String) -> Int64 {
         // ⚠️ 必须回读**真实自增主键**。
         //    原实现返回的是按时间戳自己算出来的一个「像 id 的数」，
