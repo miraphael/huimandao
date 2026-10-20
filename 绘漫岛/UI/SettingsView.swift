@@ -36,186 +36,310 @@ struct SettingsView: View {
     static var fullVersion: String { "\(version) (\(buildNumber))" }
     @State private var acc = AccountStore.load()
 
-    /// 设置入口行：图标 + 标题 + 一句说明。
-    ///
-    /// 旧版只有 `Label("阅读", systemImage:)` —— 用户看不出「阅读」里到底能改什么，
-    /// 六个入口只能靠点进去试。加一行 secondary 描述后，不用点就能判断该进哪个。
-    private func settingsRow(_ title: String, icon: String, detail: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.tint)
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                Text(detail).font(.caption2).foregroundStyle(.secondary)
+    // MARK: - 概览数据
+
+    /// 图源数 / 书架数 —— 一次读库，避免每次重绘都查
+    @State private var sourceCount = 0
+    @State private var shelfCount = 0
+
+    // MARK: - 卡片与图标
+
+    /// 白色圆角卡片（深浅色都跟着系统走）
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+            )
+    }
+
+    /// 彩色图标块（iOS 设置那种圆角小方块）
+    private func tile(_ icon: String, _ color: Color, size: CGFloat = 30) -> some View {
+        Image(systemName: icon)
+            .font(.system(size: size * 0.46, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(color.gradient,
+                        in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
+    }
+
+    /// 卡片内的一行导航
+    private func navRow<D: View>(_ title: String, detail: String?, icon: String,
+                                 color: Color, @ViewBuilder destination: () -> D) -> some View {
+        NavigationLink { destination() } label: {
+            HStack(spacing: 12) {
+                tile(icon, color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(.primary)
+                    if let detail {
+                        Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var hairline: some View {
+        Divider().padding(.leading, 56)
+    }
+
+    /// 分组标题
+    private func groupTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 4)
+    }
+
+    // MARK: - 各区块
+
+    /// 顶部概览卡：应用标识 + 版本 + 三个数字
+    private var headerCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Text("绘")
+                    .font(.system(size: 22, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .background(.white.opacity(0.18),
+                                in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("绘漫岛")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("v\(Self.version) · build \(Self.buildNumber)")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.82))
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 0) {
+                statCell("\(sourceCount)", "图源")
+                Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 26)
+                statCell("\(shelfCount)", "书架")
+                Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 26)
+                statCell("\(acc.streakDays)", "连续天数")
+            }
+        }
+        .padding(16)
+        .background(
+            LinearGradient(colors: [Theme.accent, Theme.accent.opacity(0.70)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing),
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+        )
+        .shadow(color: Theme.accent.opacity(0.28), radius: 14, x: 0, y: 8)
+    }
+
+    private func statCell(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+            Text(label).font(.caption2).foregroundStyle(.white.opacity(0.8))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// 账号卡
+    private var accountCard: some View {
+        NavigationLink { AccountView() } label: {
+            HStack(spacing: 12) {
+                Text(acc.isRegistered ? acc.avatar : "👤")
+                    .font(.system(size: 24))
+                    .frame(width: 46, height: 46)
+                    .background(Theme.accent.opacity(0.14), in: Circle())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(acc.isRegistered ? acc.nickname : "未登录")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(acc.isRegistered
+                         ? "书架 \(acc.booksRead) 本 · 已读 \(acc.chaptersRead) 话 · 连续 \(acc.streakDays) 天"
+                         : "点此创建一个本地阅读档案")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    /// 「我的内容」四宫格
+    private var contentGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12)],
+                  spacing: 12) {
+            quickTile("历史记录", "clock.arrow.circlepath", .orange) { HistoryView(embedded: true) }
+            quickTile("本地漫画", "folder.fill", .blue) { LocalView(embedded: true) }
+            quickTile("下载管理", "arrow.down.circle.fill", .green) { DownloadTasksView(embedded: true) }
+            quickTile("图集收藏", "heart.fill", .pink) { FavoritesView() }
         }
     }
 
-    private var accountSection: some View {        Section {
-            NavigationLink {
-                AccountView()
-            } label: {
-                HStack(spacing: 12) {
-                    Text(acc.isRegistered ? acc.avatar : "👤")
-                        .font(.system(size: 26))
-                        .frame(width: 44, height: 44)
-                        .background(Color.accentColor.opacity(0.12), in: Circle())
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(acc.isRegistered ? acc.nickname : "未登录")
-                            .font(.body)
-                        Text(acc.isRegistered
-                             ? "在书架 \(acc.booksRead) 本 · 已读 \(acc.chaptersRead) 话 · 连续 \(acc.streakDays) 天"
-                             : "点此创建一个本地阅读档案")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
+    private func quickTile<D: View>(_ title: String, _ icon: String, _ color: Color,
+                                    @ViewBuilder destination: () -> D) -> some View {
+        NavigationLink { destination() } label: {
+            HStack(spacing: 10) {
+                tile(icon, color, size: 34)
+                Text(title).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                Spacer(minLength: 0)
             }
-        } header: {
-            Text("账号")
+            .padding(.horizontal, 12).padding(.vertical, 14)
+            .contentShape(Rectangle())
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 设置入口卡
+    private var settingsCard: some View {
+        card {
+            VStack(spacing: 0) {
+                navRow("阅读", detail: "阅读模式 · 白边裁剪 · 缩放 · 进度",
+                       icon: "book.fill", color: .orange) { ReaderSettingsView() }
+                hairline
+                navRow("图源", detail: "导入 / 管理 / 校验图源规则",
+                       icon: "square.stack.3d.up.fill", color: .red) { SourceSettingsView() }
+                hairline
+                navRow("下载与追更", detail: "下载线程 · 自动检查更新",
+                       icon: "arrow.down.circle.fill", color: .green) { DownloadFollowSettingsView() }
+                hairline
+                navRow("网络", detail: "DoH · UA · 搜索线程 · Web 编辑器",
+                       icon: "wifi", color: .blue) { NetworkSettingsView() }
+                hairline
+                navRow("备份同步", detail: "本地备份 · WebDAV 同步",
+                       icon: "icloud.fill", color: .teal) { BackupSettingsView() }
+                hairline
+                navRow("存储与诊断", detail: "缓存清理 · 诊断日志",
+                       icon: "internaldrive.fill", color: .gray) { StorageDiagSettingsView() }
+            }
+            .padding(.vertical, 4)
         }
     }
+
+    /// 外观卡
+    private var appearanceCard: some View {
+        card {
+            navRow("主题", detail: "当前：\(themeStore.current.name)",
+                   icon: "circle.lefthalf.filled", color: .purple) { ThemeEditorView() }
+        }
+    }
+
+    /// 社区卡
+    private var communityCard: some View {
+        card {
+            Button { joinQQGroup() } label: {
+                HStack(spacing: 12) {
+                    tile("person.3.fill", .indigo)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("加入 QQ 群").foregroundStyle(.primary)
+                        Text("群号 \(Self.qqGroup) · 问题反馈 / 提需求 / 分享图源")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// 关于卡
+    private var aboutCard: some View {
+        card {
+            VStack(spacing: 0) {
+                navRow("关于绘漫岛 / 使用说明", detail: "版本 \(Self.fullVersion)",
+                       icon: "info.circle.fill", color: .blue) { AboutView() }
+                hairline
+                HStack {
+                    Text("图源规则").font(.subheadline)
+                    Spacer()
+                    Text("Legado 兼容格式").font(.subheadline).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                hairline
+                Text("绘漫岛只提供阅读工具，不存储任何漫画内容；所有内容均来自你导入的第三方图源规则。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 12)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - 页面
 
     var body: some View {
         NavigationStack {
-            Form {
-                accountSection
+            ScrollView {
+                VStack(spacing: 16) {
+                    headerCard
+                    accountCard
 
-                Section("我的内容") {
-                    NavigationLink {
-                        HistoryView(embedded: true)
-                    } label: {
-                        Label("历史记录", systemImage: "clock.arrow.circlepath")
-                    }
-                    NavigationLink {
-                        LocalView(embedded: true)
-                    } label: {
-                        Label("本地漫画", systemImage: "folder")
-                    }
-                    NavigationLink {
-                        // 已在 SettingsView 的 NavigationStack 内 → 必须 embedded，
-                        // 否则会再套一层导航栏（标题重复）。
-                        DownloadTasksView(embedded: true)
-                    } label: {
-                        Label("下载管理", systemImage: "arrow.down.circle")
-                    }
-                    NavigationLink {
-                        FavoritesView()
-                    } label: {
-                        Label("图集收藏", systemImage: "heart")
-                    }
-                }
+                    groupTitle("我的内容")
+                    contentGrid
 
-                Section("设置") {
-                    NavigationLink {
-                        ReaderSettingsView()
-                    } label: {
-                        settingsRow("阅读", icon: "book",
-                                    detail: "阅读模式 · 白边裁剪 · 缩放 · 进度")
-                    }
-                    NavigationLink {
-                        SourceSettingsView()
-                    } label: {
-                        settingsRow("图源", icon: "square.stack.3d.up",
-                                    detail: "导入 / 管理 / 校验图源规则")
-                    }
-                    NavigationLink {
-                        DownloadFollowSettingsView()
-                    } label: {
-                        settingsRow("下载与追更", icon: "arrow.down.circle",
-                                    detail: "下载线程 · 自动检查更新")
-                    }
-                    NavigationLink {
-                        NetworkSettingsView()
-                    } label: {
-                        settingsRow("网络", icon: "wifi",
-                                    detail: "DoH · UA · 搜索线程 · Web 编辑器")
-                    }
-                    NavigationLink {
-                        BackupSettingsView()
-                    } label: {
-                        settingsRow("备份同步", icon: "icloud",
-                                    detail: "本地备份 · WebDAV 同步")
-                    }
-                    NavigationLink {
-                        StorageDiagSettingsView()
-                    } label: {
-                        settingsRow("存储与诊断", icon: "internaldrive",
-                                    detail: "缓存清理 · 诊断日志")
-                    }
-                }
+                    groupTitle("设置")
+                    settingsCard
 
-                Section {
-                    NavigationLink {
-                        ThemeEditorView()
-                    } label: {
-                        HStack(spacing: 10) {
-                            Text("主题")
-                            Spacer()
-                            Text(ThemeStore.shared.current.name)
-                                .foregroundStyle(.secondary)
-                            Circle()
-                                .fill(Theme.accent)
-                                .frame(width: 12, height: 12)
-                        }
-                    }
-                } header: {
-                    Label("外观", systemImage: "circle.lefthalf.filled")
-                } footer: {
-                    Text("内置多套配色，也可以挑一张自己的图片做背景 —— 漫画阅读界面会一起跟随。")
-                }
+                    groupTitle("外观")
+                    appearanceCard
 
-                Section {
-                    Button {
-                        joinQQGroup()
-                    } label: {
-                        HStack {
-                            Label("加入 QQ 群", systemImage: "person.3.fill")
-                            Spacer()
-                            Text(Self.qqGroup).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .foregroundStyle(.primary)
-                } header: {
-                    Label("社区", systemImage: "bubble.left.and.bubble.right.fill")
-                } footer: {
-                    Text("遇到问题、想提需求、或者想分享图源，都可以进群聊。点这一行会直接打开 QQ 的加群页面。")
-                }
+                    groupTitle("社区")
+                    communityCard
 
-                Section {
-                    NavigationLink {
-                        AboutView()
-                    } label: {
-                        HStack {
-                            Text("关于绘漫岛 / 使用说明")
-                            Spacer()
-                            Text(Self.version).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    LabeledContent("版本", value: "\(Self.version) (iOS)")
-                    LabeledContent("图源规则", value: "Legado 兼容格式")
-                } header: {
-                    Label("关于", systemImage: "info.circle")
-                } footer: {
-                    Text("绘漫岛只提供阅读工具，不存储任何漫画内容；所有内容均来自你导入的第三方图源规则。")
+                    groupTitle("关于")
+                    aboutCard
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 32)
             }
-            .transparentScrollBackground()
-            // 🔴 主题背景也铺在**设置页自己这一层** —— 与两个 tab 一致。
-            //    依据：编辑器预览用同样写法能显示图，而 App 根层的写法看不到。
+            // 主题背景铺在本页这一层（与两个 tab 一致）
             .background(ThemeBackground(theme: themeStore.current))
-            // ⚠️ iOS 16+ 必须显式隐藏 `Form` 的滚动背景 —— 真机是 iOS 17，
-            //    SwiftUI 的 List/Form 已改用 UICollectionView，`UITableView.appearance()`
-            //    那套对它们**完全失效**，不写这行主题背景会被 Form 自己的底色盖住。
-            // ⚠️ 这里**只**隐藏滚动背景，**不**加背景视图：主题背景由外层（tab 根）铺。
-            //    在导航栈内部的页面里放 `ignoresSafeArea` 的背景会让 push 转场残留上一页。
-            .scrollContentBackgroundCompat()
             .navigationTitle("设置")
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 var a = AccountStore.load()
                 if a.isRegistered { AccountStore.refreshStats(into: &a) }
                 acc = a
+                sourceCount = ComicRepository.shared.allSources().count
+                shelfCount = ComicRepository.shared.shelfList().count
             }
             .onReceive(NotificationCenter.default.publisher(for: .hmdAccountChanged)) { _ in
                 acc = AccountStore.load()
