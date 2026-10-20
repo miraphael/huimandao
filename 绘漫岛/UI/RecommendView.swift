@@ -21,6 +21,8 @@ struct RecommendView: View {
     @State private var loadGen = 0
     @State private var hasMore = true
     @State private var moreMessage = ""
+    /// 漫画台空着时的**具体原因**（别只写「还没有图源」—— 用户明明有源）
+    @State private var emptyReason = ""
 
     var body: some View {
         if embedded {
@@ -128,8 +130,11 @@ struct RecommendView: View {
                                    description: "图源可能需要网络代理，或换个栏目/图源试试")
                     }
                     if !loading && sources.isEmpty {
-                        EmptyState(title: "还没有图源", systemImage: "square.stack.3d.up",
-                                   description: "到「图源」页导入（支持二维码/链接/粘贴）")
+                        EmptyState(title: emptyReason.isEmpty ? "还没有图源" : emptyReason,
+                                   systemImage: "square.stack.3d.up",
+                                   description: emptyReason.contains("发现栏目")
+                                       ? "到「图源」→ 编辑该源 → 填「发现栏目」（格式：名称::网址）\n或者直接用「搜索」页找漫画"
+                                       : "到「图源」页导入（支持二维码 / 链接 / 粘贴）")
                     }
                     // 🔴 补上第三种情况（此前是「空白无解释」的真空地带）：
                     //    **有图源、但该源的 ruleFindUrl 为空** → 栏目 Tab 不显示
@@ -151,9 +156,34 @@ struct RecommendView: View {
         if sources.isEmpty {
             // 去重：同一 URL 只留一个（重复导入包时防 SwiftUI ForEach 重复 ID 崩溃）
             var seen = Set<String>()
-            sources = ComicRepository.shared.allSources(includeDisabled: false)
-                .filter { $0.isExploreEnabled }
+            let enabled = ComicRepository.shared.allSources(includeDisabled: false)
+            let withFind = enabled.filter { !($0.ruleFindUrl ?? "").isEmpty }
+            var usable = withFind.filter { $0.isExploreEnabled }
                 .filter { seen.insert($0.bookSourceUrl).inserted }
+
+            // 🩹 自愈：有栏目却一个都不可用 → 说明「发现开关」被误关（导入的源常见），
+            //    自动打开并把原因记进日志，别让用户面对一片空白。
+            if usable.isEmpty && !withFind.isEmpty {
+                ComicRepository.shared.setExploreEnabled(urls: withFind.map(\.bookSourceUrl), enable: true)
+                seen.removeAll()
+                usable = withFind.filter { seen.insert($0.bookSourceUrl).inserted }
+                DiagLog.event("recommend", "selfheal",
+                              "有 \(withFind.count) 个源配了发现栏目但开关全关 → 已自动打开")
+            }
+            sources = usable
+            if usable.isEmpty {
+                if enabled.isEmpty {
+                    emptyReason = "还没有启用的图源"
+                } else if withFind.isEmpty {
+                    emptyReason = "\(enabled.count) 个图源都没有配置「发现栏目」"
+                } else {
+                    emptyReason = "图源暂时不可用"
+                }
+            } else {
+                emptyReason = ""
+            }
+            DiagLog.event("recommend", "sources",
+                          "启用 \(enabled.count) · 有栏目 \(withFind.count) · 可用 \(usable.count)")
             if selectedSource == nil {
                 // 默认漫画台；其次记住的上次选择；最后第一个
                 let preferred = sources.first(where: { $0.bookSourceUrl == lastSourceUrl })

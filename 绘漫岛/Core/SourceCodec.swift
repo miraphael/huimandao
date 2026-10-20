@@ -150,6 +150,13 @@ enum SourceCodec {
         return list.map { s in
             var s = s
             s.decryptRules(sourceUrl: s.bookSourceUrl)
+            // 「发现」开关：从 Legado 导入的源常带 `enabledExplore: false`（Legado 的默认值），
+            // 而我们的漫画台只列「有栏目 + 开关打开」的源 —— 结果整片漫画台空掉。
+            // 只要它配了发现栏目，就默认打开；用户仍可在图源页用那个小圆点关掉。
+            if let f = s.ruleFindUrl, !f.isEmpty, s.enabledExplore == false {
+                s.enabledExplore = true
+                DiagLog.event("import", "explore", "「\(s.bookSourceName)」有发现栏目但开关是关的 → 已自动打开")
+            }
             return s
         }
     }
