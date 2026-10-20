@@ -279,16 +279,29 @@ struct SourceListView: View {
 
     /// 分享选中：写成临时 JSON 文件交给系统分享面板
     private func shareSelected() {
-        let list = selectedSources
-        guard !list.isEmpty else { return }
+        shareJSONFile(selectedSources, name: "绘漫岛图源")
+    }
+
+    /// 导出为 **JSON 文件**（系统分享面板 → 可存到「文件」/ 微信 / AirDrop / 邮件）。
+    ///
+    /// ⚠️ 必须传**文件 URL**而不是 JSON 字符串：传字符串时系统常把它当纯文本，
+    ///    对方收到的是 .txt 或被截断，导入端识别不出「这是图源 JSON」。
+    private func shareJSONFile(_ list: [ComicSource], name: String) {
+        guard !list.isEmpty else {
+            toast = "没有可导出的图源"
+            return
+        }
         let json = SourceCodec.exportJson(list, pretty: true)
+        let safeName = name.replacingOccurrences(of: "/", with: "-")
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("绘漫岛图源_\(list.count)个.json")
+            .appendingPathComponent("\(safeName)_\(list.count)个.json")
         do {
             try json.data(using: .utf8)?.write(to: url)
             shareItems = [url]
+            DiagLog.event("sources", "export",
+                          "JSON 文件 \(url.lastPathComponent)（\(json.count) 字符 / \(list.count) 源）")
         } catch {
-            toast = "生成分享文件失败"
+            toast = "生成 JSON 文件失败"
         }
     }
 
@@ -389,7 +402,7 @@ struct SourceListView: View {
             Divider()
             Button { enableSelection(true) } label: { Label("启用选中", systemImage: "power") }
             Button { enableSelection(false) } label: { Label("停用选中", systemImage: "pause") }
-            Button { shareSelected() } label: { Label("分享选中（JSON 文件）", systemImage: "square.and.arrow.up") }
+            Button { shareSelected() } label: { Label("导出选中为 JSON 文件", systemImage: "doc.badge.arrow.up") }
             Divider()
             Button { groupInput = ""; showGroupAdd = true } label: { Label("加入分组…", systemImage: "folder.badge.plus") }
             Button { groupInput = ""; showGroupRemove = true } label: { Label("移出分组…", systemImage: "folder.badge.minus") }
@@ -592,7 +605,7 @@ struct SourceListView: View {
                             }
                         } label: { Label("排序", systemImage: "arrow.up.arrow.down") }
                         Button { showEditor = true } label: { Label("新建图源", systemImage: "plus.square") }
-                        Button { exportAll() } label: { Label("导出全部", systemImage: "square.and.arrow.up") }
+                        Button { exportAll() } label: { Label("导出全部为 JSON 文件", systemImage: "doc.badge.arrow.up") }
                         Button {
                             toast = "先勾选图源，再点底部 ⋯ →「导出选中为二维码」"
                         } label: { Label("导出为二维码…", systemImage: "qrcode") }
@@ -718,10 +731,9 @@ struct SourceListView: View {
         reload()
     }
 
+    /// 导出全部为 JSON 文件（可存到「文件」/ 微信 / AirDrop）
     private func exportAll() {
-        let text = SourceCodec.exportJson(sources)
-        let av = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-        UIApplication.shared.topViewController()?.present(av, animated: true)
+        shareJSONFile(sources, name: "绘漫岛图源_全部")
     }
 
     /// 一键加密导出（对应 OnkeyEncryptActivity：加密章节/正文规则为 S001 格式）
