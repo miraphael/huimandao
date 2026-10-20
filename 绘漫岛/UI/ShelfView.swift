@@ -422,34 +422,26 @@ struct ShelfPanelGrid: View {
         }
     }
 
+    /// 分格布局 —— **每格都是 2:3**（漫画封面的标准比例）。
+    ///
+    /// 🔴 为什么必须这样（v124→v127 的教训）：
+    /// 原来格子是「宽而矮」的（118×132、354×168），而封面是 2:3 竖版：
+    /// · `scaledToFill` → 上下被裁掉 → 用户说「封面显示不全」
+    /// · `scaledToFit`  → 缩到 88 宽留白 → 用户说「图片变小了」
+    /// 两者都治不好，因为**问题在格子形状，不在缩放方式**。
+    /// 把格子做成 2:3 后，`scaledToFill` 既不裁也不缩，正好铺满。
+    ///
+    /// 宽度按 iPhone 常见屏宽算：内容宽 ≈354，两列各 ≈175 → 高 = 175×1.5 ≈ 262。
     private var rows: [ShelfPanelRow] {
+        let perRow = 2
+        let cellHeight: CGFloat = 262
         var out: [ShelfPanelRow] = []
-        var i = 0
-        var n = 0
+        var i = 0, n = 0
         while i < items.count {
-            let left = items.count - i
-            switch n % 3 {
-            case 0 where left >= 3:
-                let big = ShelfPanel(item: items[i], height: 176)
-                let a = ShelfPanel(item: items[i + 1], height: 86)
-                let b = ShelfPanel(item: items[i + 2], height: 86)
-                out.append(ShelfPanelRow(id: n, slots: [.single(big, flex: 1.5),
-                                                        .stack([a, b], flex: 1)]))
-                i += 3
-            case 1 where left >= 3:
-                let ps = (0..<3).map { ShelfPanel(item: items[i + $0], height: 132) }
-                out.append(ShelfPanelRow(id: n, slots: ps.map { .single($0, flex: 1) }))
-                i += 3
-            case 2:
-                out.append(ShelfPanelRow(id: n,
-                                         slots: [.single(ShelfPanel(item: items[i], height: 168), flex: 1)]))
-                i += 1
-            default:
-                let take = min(left, 3)
-                let ps = (0..<take).map { ShelfPanel(item: items[i + $0], height: 132) }
-                out.append(ShelfPanelRow(id: n, slots: ps.map { .single($0, flex: 1) }))
-                i += take
-            }
+            let take = min(perRow, items.count - i)
+            let ps = (0..<take).map { ShelfPanel(item: items[i + $0], height: cellHeight) }
+            out.append(ShelfPanelRow(id: n, slots: ps.map { .single($0, flex: 1) }))
+            i += take
             n += 1
         }
         return out
@@ -467,11 +459,13 @@ struct MangaShelfCell: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            CoverImage(url: item.coverUrl, fit: true)
+            // 格子已经是 2:3，`scaledToFill` 正好铺满 —— 不裁切、不缩小。
+            // （之前用 fit: true 是为了「显示完整」，但那会让 2:3 封面在宽格子里缩水）
+            CoverImage(url: item.coverUrl)
                 .grayscale(1)
                 .frame(maxWidth: .infinity)
                 .frame(height: panelHeight)
-                .background(Self.paper)   // 留白处是纸色，不是灰块
+                .background(Self.paper)
                 .clipped()
 
             VStack(spacing: 0) {
