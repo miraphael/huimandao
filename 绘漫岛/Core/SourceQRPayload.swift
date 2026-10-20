@@ -42,8 +42,12 @@ enum SourceQRCodec {
     static func encode(json: String, chunk: Int = chunkLength) -> [String] {
         let raw = Data(json.utf8)
         guard !raw.isEmpty else { return [] }
-        // 压一压：图源 JSON 字段名高度重复，实测压缩率 40%~70%
-        let zipped = (try? (raw as NSData).compressed(using: .zlib)) ?? Data()
+        // 压一压：图源 JSON 字段名高度重复，实测压缩率 40%~70%。
+        // 🔴 `NSData.compressed` 返回 **NSData**，`try?` 之后是 `NSData?`，
+        //    不能和 `Data()` 一起 `??`（编译报 binary operator '??' cannot be applied）。
+        //    必须先桥接 `as Data`。
+        var zipped = Data()
+        if let n = try? (raw as NSData).compressed(using: .zlib) { zipped = n as Data }
         let useZip = zipped.count > 0 && zipped.count < raw.count
         let b64 = (useZip ? zipped : raw).base64EncodedString()
         guard !b64.isEmpty else { return [] }
@@ -91,9 +95,10 @@ enum SourceQRCodec {
         }
         guard let data = Data(base64Encoded: b64) else { return nil }
         if first.packed {
-            guard let un = try? (data as NSData).decompressed(using: .zlib) as Data,
-                  let json = String(data: un, encoding: .utf8) else { return nil }
-            return json
+            // 同样：`NSData.decompressed` 返回 NSData，先桥接再解字符串
+            guard let n = try? (data as NSData).decompressed(using: .zlib) else { return nil }
+            let un = n as Data
+            return String(data: un, encoding: .utf8)
         }
         return String(data: data, encoding: .utf8)
     }
