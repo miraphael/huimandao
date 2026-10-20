@@ -96,6 +96,7 @@ final class Database {
               BOOK_SOURCE_URL TEXT PRIMARY KEY, BOOK_SOURCE_TYPE TEXT, BOOK_SINGLE_THREAD TEXT,
               BOOK_DELAY_TIME TEXT, BOOK_SOURCE_NAME TEXT, BOOK_SOURCE_GROUP TEXT, CHECK_URL TEXT,
               LAST_UPDATE_TIME INTEGER, SERIAL_NUMBER INTEGER, WEIGHT INTEGER, ENABLE INTEGER,
+              ENABLED_EXPLORE INTEGER DEFAULT 1,
               RULE_FIND_URL TEXT, RULE_SEARCH_URL TEXT, RULE_SEARCH_URL_NEXT TEXT,
               RULE_SEARCH_LIST TEXT, RULE_SEARCH_NAME TEXT, RULE_SEARCH_AUTHOR TEXT,
               RULE_SEARCH_KIND TEXT, RULE_SEARCH_LAST_CHAPTER TEXT, RULE_SEARCH_COVER_URL TEXT,
@@ -230,6 +231,11 @@ final class Database {
             //
             // ⚠️ 这里必须用 columnExistsLocked（直接用已打开的 db 句柄），
             // 绝不能走 Database.query —— 那条路会 queue.sync 自死锁。
+            // 「发现」开关（v122）。CREATE TABLE IF NOT EXISTS 不会给老库补列，
+            // 不补的话读 ENABLED_EXPLORE 会 no such column。
+            if !columnExistsLocked("COMIC_SOURCE_BEAN", "ENABLED_EXPLORE") {
+                execLocked("ALTER TABLE COMIC_SOURCE_BEAN ADD COLUMN ENABLED_EXPLORE INTEGER DEFAULT 1")
+            }
             if !columnExistsLocked("COMIC_SHELF_BEAN", "CHAPTERS_JSON") {
                 execLocked("ALTER TABLE COMIC_SHELF_BEAN ADD COLUMN CHAPTERS_JSON TEXT")
             }

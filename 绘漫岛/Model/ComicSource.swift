@@ -10,6 +10,8 @@ struct ComicSource: Codable, Identifiable, Hashable {
     var bookSingleThread: String? = nil
     var bookDelayTime: String? = nil
     var enable: Bool? = true
+    /// 「发现」开关（对齐 Legado 的 `enabledExplore`）。只在源有 `ruleFindUrl` 时有意义。
+    var enabledExplore: Bool? = true
     var weight: Int? = 0
     var serialNumber: Int? = 0
     var lastUpdateTime: Int64? = 0
@@ -84,6 +86,7 @@ struct ComicSource: Codable, Identifiable, Hashable {
         bookSingleThread = s(.bookSingleThread)
         bookDelayTime = s(.bookDelayTime)
         enable = (try? c.decodeIfPresent(Bool.self, forKey: .enable)) ?? true
+        enabledExplore = (try? c.decodeIfPresent(Bool.self, forKey: .enabledExplore)) ?? true
         weight = (try? c.decodeIfPresent(Int.self, forKey: .weight)) ?? 0
         serialNumber = (try? c.decodeIfPresent(Int.self, forKey: .serialNumber)) ?? 0
         lastUpdateTime = (try? c.decodeIfPresent(Int64.self, forKey: .lastUpdateTime)) ?? 0
@@ -131,7 +134,7 @@ struct ComicSource: Codable, Identifiable, Hashable {
 
     private enum CodingKeys: String, CodingKey {
         case bookSourceType, bookSourceUrl, bookSourceName, bookSourceGroup, bookSingleThread, bookDelayTime
-        case enable, weight, serialNumber, lastUpdateTime, checkUrl, httpUserAgent, loginUrl, loginUrlResult, sourceRemark
+        case enable, enabledExplore, weight, serialNumber, lastUpdateTime, checkUrl, httpUserAgent, loginUrl, loginUrlResult, sourceRemark
         case header
         case ruleFindUrl, ruleSearchUrl, ruleSearchUrlNext, ruleSearchList, ruleSearchName, ruleSearchAuthor
         case ruleSearchKind, ruleSearchLastChapter, ruleSearchCoverUrl, ruleSearchCoverDecoder, ruleSearchNoteUrl
@@ -140,6 +143,12 @@ struct ComicSource: Codable, Identifiable, Hashable {
         case ruleChapterUrlNext, ruleChapterParentId, ruleChapterParentName, ruleContentUrl, ruleContentUrlNext
         case ruleChapterApi, ruleChapterApiList, ruleChapterApiUrl
         case ruleBookContent, ruleBookContentDecoder, ruleContentFlow
+    }
+
+    /// 这个源能不能出现在「发现」页：有栏目规则 + 开关打开
+    var isExploreEnabled: Bool {
+        guard let f = ruleFindUrl, !f.isEmpty else { return false }
+        return enabledExplore ?? true
     }
 
     var groupList: [String] {

@@ -152,7 +152,7 @@ struct RecommendView: View {
             // 去重：同一 URL 只留一个（重复导入包时防 SwiftUI ForEach 重复 ID 崩溃）
             var seen = Set<String>()
             sources = ComicRepository.shared.allSources(includeDisabled: false)
-                .filter { !($0.ruleFindUrl ?? "").isEmpty }
+                .filter { $0.isExploreEnabled }
                 .filter { seen.insert($0.bookSourceUrl).inserted }
             if selectedSource == nil {
                 // 默认漫画台；其次记住的上次选择；最后第一个

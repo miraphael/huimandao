@@ -115,7 +115,7 @@ final class ComicRepository {
         Database.shared.exec("""
             INSERT OR REPLACE INTO COMIC_SOURCE_BEAN (
             BOOK_SOURCE_URL, BOOK_SOURCE_TYPE, BOOK_SINGLE_THREAD, BOOK_DELAY_TIME, BOOK_SOURCE_NAME,
-            BOOK_SOURCE_GROUP, CHECK_URL, LAST_UPDATE_TIME, SERIAL_NUMBER, WEIGHT, ENABLE,
+            BOOK_SOURCE_GROUP, CHECK_URL, LAST_UPDATE_TIME, SERIAL_NUMBER, WEIGHT, ENABLE, ENABLED_EXPLORE,
             RULE_FIND_URL, RULE_SEARCH_URL, RULE_SEARCH_URL_NEXT, RULE_SEARCH_LIST, RULE_SEARCH_NAME,
             RULE_SEARCH_AUTHOR, RULE_SEARCH_KIND, RULE_SEARCH_LAST_CHAPTER, RULE_SEARCH_COVER_URL,
             RULE_SEARCH_COVER_DECODER, RULE_SEARCH_NOTE_URL, RULE_BOOK_NAME, RULE_BOOK_AUTHOR,
@@ -126,11 +126,11 @@ final class ComicRepository {
             RULE_BOOK_LAST_CHAPTER, RULE_BOOK_URL_PATTERN, LOGIN_URL, LOGIN_URL_RESULT, SOURCE_REMARK,
             HEADER, RULE_CONTENT_FLOW,
             RULE_CHAPTER_API, RULE_CHAPTER_API_LIST, RULE_CHAPTER_API_URL)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             s.bookSourceUrl, s.bookSourceType ?? "漫画", s.bookSingleThread ?? "", s.bookDelayTime ?? "",
             s.bookSourceName, s.bookSourceGroup ?? "", s.checkUrl ?? "", s.lastUpdateTime ?? 0,
-            s.serialNumber ?? 0, s.weight ?? 0, s.isEnabled ? 1 : 0,
+            s.serialNumber ?? 0, s.weight ?? 0, s.isEnabled ? 1 : 0, (s.enabledExplore ?? true) ? 1 : 0,
             s.ruleFindUrl ?? "", s.ruleSearchUrl ?? "", s.ruleSearchUrlNext ?? "", s.ruleSearchList ?? "",
             s.ruleSearchName ?? "", s.ruleSearchAuthor ?? "", s.ruleSearchKind ?? "", s.ruleSearchLastChapter ?? "",
             s.ruleSearchCoverUrl ?? "", s.ruleSearchCoverDecoder ?? "", s.ruleSearchNoteUrl ?? "",
@@ -180,6 +180,22 @@ final class ComicRepository {
         invalidateSourceCache()
     }
 
+    /// 「发现」开关（对齐 Legado 的 `enableExplore`）
+    func setExploreEnabled(urls: [String], enable: Bool) {
+        guard !urls.isEmpty else { return }
+        for u in urls {
+            Database.shared.exec("UPDATE COMIC_SOURCE_BEAN SET ENABLED_EXPLORE=? WHERE BOOK_SOURCE_URL=?",
+                                 enable ? 1 : 0, u)
+        }
+        invalidateSourceCache()
+    }
+
+    /// 手动排序：直接写 WEIGHT
+    func setSourceWeight(url: String, weight: Int) {
+        Database.shared.exec("UPDATE COMIC_SOURCE_BEAN SET WEIGHT=? WHERE BOOK_SOURCE_URL=?", weight, url)
+        invalidateSourceCache()
+    }
+
     /// 置顶 / 置底（对齐 Legado 的 `toTop` / `toBottom`）。
     ///
     /// 列表的排序是 `ORDER BY WEIGHT DESC, SERIAL_NUMBER`（见 `allSources`），
@@ -214,6 +230,7 @@ final class ComicRepository {
         s.bookDelayTime = row["BOOK_DELAY_TIME"] as? String
         s.bookSourceName = row["BOOK_SOURCE_NAME"] as? String ?? ""
         s.bookSourceGroup = row["BOOK_SOURCE_GROUP"] as? String
+        s.enabledExplore = ((row["ENABLED_EXPLORE"] as? Int64) ?? 1) != 0
         s.checkUrl = row["CHECK_URL"] as? String
         s.lastUpdateTime = row["LAST_UPDATE_TIME"] as? Int64
         s.serialNumber = Int(truncatingIfNeeded: row["SERIAL_NUMBER"] as? Int64 ?? 0)

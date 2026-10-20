@@ -714,7 +714,8 @@ final class ComicEngine {
         let enabled = sources ?? ComicRepository.shared.allSources(includeDisabled: false)
         var cols: [FindColumn] = []
         for s in enabled {
-            guard let find = s.ruleFindUrl, !find.isEmpty else { continue }
+            // 「发现」开关关掉的源不贡献栏目（对齐 Legado 的 enabledExplore）
+            guard s.isExploreEnabled, let find = s.ruleFindUrl, !find.isEmpty else { continue }
             let probe = AnalyzeRule(baseUrl: s.bookSourceUrl)
             for (title, rawUrl) in Self.parseFindUrl(find) {
                 // 栏目 URL 可能带尾部 @Header:{...}，要摘出来单独用

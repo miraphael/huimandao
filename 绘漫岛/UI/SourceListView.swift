@@ -79,6 +79,10 @@ struct SourceListView: View {
     /// 分组筛选：nil = 全部，"\u{0}未分组" = 未分组
     @State private var groupFilter: String? = nil
     @State private var showGroupManage = false
+    /// 按域名分组显示
+    @State private var groupByHost = false
+    /// 手动排序时进入编辑模式（出拖动把手）
+    @State private var editMode: EditMode = .inactive
     /// 分享面板的内容（图源 JSON 文本）
     @State private var shareItems: [Any]? = nil
 
@@ -103,17 +107,41 @@ struct SourceListView: View {
                         //    那个图源管理里面」。所以这里不再单开一个「JS 类图源」入口，
                         //    而是把 JS 源**作为普通行**混排在主列表里（带 `{ }` 角标区分）。
                         //    点进去直接开 JS 源编辑器，与规则源的编辑体验一致。
-                        ForEach(jsItems) { item in
-                            jsRow(item)
+                        if !groupByHost {
+                            ForEach(jsItems) { item in
+                                jsRow(item)
+                            }
                         }
-                        ForEach(filtered) { s in
-                            sourceRow(s)
+                        // 按域名分组显示（对齐 Legado 的 menu_group_sources_by_domain）
+                        if groupByHost {
+                            ForEach(hostGroups, id: \.host) { g in
+                                Section {
+                                    ForEach(g.items) { s in
+                                        sourceRow(s)
+                                    }
+                                } header: {
+                                    HStack {
+                                        Text(g.host)
+                                        Spacer()
+                                        Text("\(g.items.count)").foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        } else {
+                            ForEach(filtered) { s in
+                                sourceRow(s)
+                            }
+                            // 手动排序：仅在「手动」模式下允许拖动
+                            .onMove { from, to in
+                                moveRows(from: from, to: to)
+                            }
                         }
                         // 多选模式的底部操作条（开源阅读那套：全选 / 反选 / 删除）
                         .safeAreaInset(edge: .bottom) {
                             if hasSelection { selectBar }
                         }
                     }
+                    .environment(\.editMode, $editMode)
                     .transparentScrollBackground()
                     .listStyle(.insetGrouped)
                 }
@@ -184,6 +212,16 @@ struct SourceListView: View {
                             }
                         } label: { Label("分组筛选", systemImage: "line.3.horizontal.decrease.circle") }
                         Button { showGroupManage = true } label: { Label("分组管理", systemImage: "folder.badge.gearshape") }
+                        Toggle(isOn: $groupByHost) {
+                            Label("按域名分组显示", systemImage: "rectangle.3.group")
+                        }
+                        Button {
+                            sortMode = .manual
+                            withAnimation { editMode = (editMode == .active ? .inactive : .active) }
+                        } label: {
+                            Label(editMode == .active ? "完成排序" : "手动排序（拖动）",
+                                  systemImage: "arrow.up.arrow.down.square")
+                        }
                         Menu {
                             Picker("排序", selection: $sortMode) {
                                 ForEach(SourceSort.allCases, id: \.self) { m in
@@ -296,6 +334,18 @@ struct SourceListView: View {
         reload()
     }
 
+    private func toggleExplore(_ s: ComicSource) {
+        ComicRepository.shared.setExploreEnabled(urls: [s.bookSourceUrl], enable: !s.isExploreEnabled)
+        reload()
+    }
+
+    private func setExplore(_ on: Bool, urls: [String]) {
+        guard !urls.isEmpty else { return }
+        ComicRepository.shared.setExploreEnabled(urls: urls, enable: on)
+        toast = on ? "已启用 \(urls.count) 个源的发现" : "已禁用 \(urls.count) 个源的发现"
+        reload()
+    }
+
     private func moveToTop(_ urls: [String]) {
         guard !urls.isEmpty else { return }
         ComicRepository.shared.moveSources(urls: urls, toTop: true)
@@ -399,6 +449,9 @@ struct SourceListView: View {
                 Button { groupInput = ""; showGroupRemove = true } label: { Label("移出分组…", systemImage: "folder.badge.minus") }
                 Button { showGroupManage = true } label: { Label("分组管理…", systemImage: "folder.badge.gearshape") }
                 Divider()
+                Button { setExplore(true, urls: selectedURLs) } label: { Label("启用发现", systemImage: "square.grid.2x2") }
+                Button { setExplore(false, urls: selectedURLs) } label: { Label("禁用发现", systemImage: "square.grid.2x2.fill") }
+                Divider()
                 Button { moveToTop(selectedURLs) } label: { Label("置顶", systemImage: "arrow.up.to.line") }
                 Button { moveToBottom(selectedURLs) } label: { Label("置底", systemImage: "arrow.down.to.line") }
                 Divider()
@@ -474,6 +527,15 @@ struct SourceListView: View {
             }
             .buttonStyle(.plain)
 
+            // 「发现」状态图标（对齐 Legado 的 ivExplore：绿=启用、红=禁用、无栏目则隐藏）
+            if !(s.ruleFindUrl ?? "").isEmpty {
+                Button { toggleExplore(s) } label: {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.caption)
+                        .foregroundStyle(s.isExploreEnabled ? Color.green : Color.red)
+                }
+                .buttonStyle(.plain)
+            }
             // 红开关
             Toggle("", isOn: Binding(get: { s.isEnabled },
                                      set: { v in
@@ -494,6 +556,11 @@ struct SourceListView: View {
                 Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
                 Button { toggleSelect(key) } label: {
                     Label(isSel ? "取消选择" : "选择", systemImage: "checkmark.circle")
+                }
+                if !(s.ruleFindUrl ?? "").isEmpty {
+                    Button { toggleExplore(s) } label: {
+                        Label(s.isExploreEnabled ? "禁用发现" : "启用发现", systemImage: "square.grid.2x2")
+                    }
                 }
                 Divider()
                 Button { moveToTop([s.bookSourceUrl]) } label: { Label("置顶", systemImage: "arrow.up.to.line") }
@@ -521,6 +588,30 @@ struct SourceListView: View {
 
     /// 「未分组」用的哨兵 key（真实分组名不可能等于它）
     static let ungroupedKey = "\u{0}__ungrouped__"
+
+    /// 按域名聚合（保持当前排序后的相对顺序）
+    private var hostGroups: [(host: String, items: [ComicSource])] {
+        var order: [String] = []
+        var map: [String: [ComicSource]] = [:]
+        for s in filtered {
+            let h = hostOf(s.bookSourceUrl)
+            if map[h] == nil { order.append(h) }
+            map[h, default: []].append(s)
+        }
+        return order.map { (host: $0, items: map[$0] ?? []) }
+    }
+
+    /// 拖动排序落库：按新顺序重写 WEIGHT（列表是 WEIGHT DESC，所以越大越靠前）
+    private func moveRows(from: IndexSet, to: Int) {
+        var arr = filtered
+        arr.move(fromOffsets: from, toOffset: to)
+        let total = arr.count
+        for (idx, s) in arr.enumerated() {
+            // 越靠前 WEIGHT 越大
+            ComicRepository.shared.setSourceWeight(url: s.bookSourceUrl, weight: total - idx)
+        }
+        reload()
+    }
 
     /// 所有源里出现过的分组名（去重、按名称排序）
     private var allGroups: [String] {
