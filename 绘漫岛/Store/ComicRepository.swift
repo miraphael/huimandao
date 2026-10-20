@@ -180,6 +180,19 @@ final class ComicRepository {
         invalidateSourceCache()
     }
 
+    /// 置顶 / 置底（对齐 Legado 的 `toTop` / `toBottom`）。
+    ///
+    /// 列表的排序是 `ORDER BY WEIGHT DESC, SERIAL_NUMBER`（见 `allSources`），
+    /// 所以改 WEIGHT 就能把源顶到最前 / 沉到最后，不用重排整张表。
+    func moveSources(urls: [String], toTop: Bool) {
+        guard !urls.isEmpty else { return }
+        let sql = toTop
+            ? "UPDATE COMIC_SOURCE_BEAN SET WEIGHT = (SELECT IFNULL(MAX(WEIGHT),0)+1 FROM COMIC_SOURCE_BEAN) WHERE BOOK_SOURCE_URL=?"
+            : "UPDATE COMIC_SOURCE_BEAN SET WEIGHT = (SELECT IFNULL(MIN(WEIGHT),0)-1 FROM COMIC_SOURCE_BEAN) WHERE BOOK_SOURCE_URL=?"
+        for u in urls { Database.shared.exec(sql, u) }
+        invalidateSourceCache()
+    }
+
     /// 改图源分组（对齐 Legado 的「加入分组 / 移出分组」）。
     /// 分组是逗号分隔的多值字段，与 Legado 一致（`bookSourceGroup`）。
     func setSourceGroups(url: String, groups: [String]) {

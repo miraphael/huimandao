@@ -76,6 +76,11 @@ struct SourceListView: View {
     @State private var toast: String? = nil
     /// 排序方式（对齐 Legado 的「排序」菜单：手动/名称/链接/启用状态）
     @State private var sortMode: SourceSort = .manual
+    /// 分组筛选：nil = 全部，"\u{0}未分组" = 未分组
+    @State private var groupFilter: String? = nil
+    @State private var showGroupManage = false
+    /// 分享面板的内容（图源 JSON 文本）
+    @State private var shareItems: [Any]? = nil
 
     var body: some View {
         if embedded {
@@ -166,6 +171,20 @@ struct SourceListView: View {
                     Menu {
                         Button { showImport = true } label: { Label("导入图源", systemImage: "square.and.arrow.down") }
                         Menu {
+                            Button { groupFilter = nil } label: {
+                                Label("全部分组", systemImage: groupFilter == nil ? "checkmark" : "folder")
+                            }
+                            ForEach(allGroups, id: \.self) { g in
+                                Button { groupFilter = g } label: {
+                                    Label(g, systemImage: groupFilter == g ? "checkmark" : "folder")
+                                }
+                            }
+                            Button { groupFilter = Self.ungroupedKey } label: {
+                                Label("未分组", systemImage: groupFilter == Self.ungroupedKey ? "checkmark" : "tray")
+                            }
+                        } label: { Label("分组筛选", systemImage: "line.3.horizontal.decrease.circle") }
+                        Button { showGroupManage = true } label: { Label("分组管理", systemImage: "folder.badge.gearshape") }
+                        Menu {
                             Picker("排序", selection: $sortMode) {
                                 ForEach(SourceSort.allCases, id: \.self) { m in
                                     Text(m.title).tag(m)
@@ -196,6 +215,13 @@ struct SourceListView: View {
             }
             .sheet(isPresented: $showImport) { ImportSheet(onDone: reload) }
             .sheet(isPresented: $showQRExport) { SourceQRExportView(sources: exportList) }
+            .sheet(isPresented: $showGroupManage) {
+                SourceGroupManageView { reload() }
+            }
+            .sheet(isPresented: Binding(get: { shareItems != nil },
+                                        set: { if !$0 { shareItems = nil } })) {
+                ShareSheet(items: shareItems ?? [])
+            }
             .sheet(isPresented: $showCheck) { NavigationStack { SourceCheckView() } }
             .sheet(item: $loginSource) { src in
                 NavigationStack { SourceLoginView(source: src) }
@@ -270,6 +296,35 @@ struct SourceListView: View {
         reload()
     }
 
+    private func moveToTop(_ urls: [String]) {
+        guard !urls.isEmpty else { return }
+        ComicRepository.shared.moveSources(urls: urls, toTop: true)
+        toast = "已置顶 \(urls.count) 个"
+        reload()
+    }
+
+    private func moveToBottom(_ urls: [String]) {
+        guard !urls.isEmpty else { return }
+        ComicRepository.shared.moveSources(urls: urls, toTop: false)
+        toast = "已置底 \(urls.count) 个"
+        reload()
+    }
+
+    /// 分享选中：写成临时 JSON 文件交给系统分享面板
+    private func shareSelected() {
+        let list = selectedSources
+        guard !list.isEmpty else { return }
+        let json = SourceCodec.exportJson(list, pretty: true)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("绘漫岛图源_\(list.count)个.json")
+        do {
+            try json.data(using: .utf8)?.write(to: url)
+            shareItems = [url]
+        } catch {
+            toast = "生成分享文件失败"
+        }
+    }
+
     private func exportSelected() {
         let picked = selectedSources
         guard !picked.isEmpty else {
@@ -338,10 +393,16 @@ struct SourceListView: View {
             barButton("删除", systemImage: "trash", destructive: true) { pendingMultiDelete = true }
             Menu {
                 Button { exportSelected() } label: { Label("导出选中为二维码", systemImage: "qrcode") }
+                Button { shareSelected() } label: { Label("分享选中（JSON 文件）", systemImage: "square.and.arrow.up") }
                 Divider()
                 Button { groupInput = ""; showGroupAdd = true } label: { Label("加入分组…", systemImage: "folder.badge.plus") }
                 Button { groupInput = ""; showGroupRemove = true } label: { Label("移出分组…", systemImage: "folder.badge.minus") }
+                Button { showGroupManage = true } label: { Label("分组管理…", systemImage: "folder.badge.gearshape") }
                 Divider()
+                Button { moveToTop(selectedURLs) } label: { Label("置顶", systemImage: "arrow.up.to.line") }
+                Button { moveToBottom(selectedURLs) } label: { Label("置底", systemImage: "arrow.down.to.line") }
+                Divider()
+                Button { showCheck = true } label: { Label("图源检验", systemImage: "checkmark.seal") }
                 Button {
                     selected.removeAll()
                 } label: { Label("取消选择", systemImage: "xmark.circle") }
@@ -435,6 +496,9 @@ struct SourceListView: View {
                     Label(isSel ? "取消选择" : "选择", systemImage: "checkmark.circle")
                 }
                 Divider()
+                Button { moveToTop([s.bookSourceUrl]) } label: { Label("置顶", systemImage: "arrow.up.to.line") }
+                Button { moveToBottom([s.bookSourceUrl]) } label: { Label("置底", systemImage: "arrow.down.to.line") }
+                Divider()
                 Button(role: .destructive) { pendingDelete = s } label: { Label("删除", systemImage: "trash") }
             } label: {
                 Image(systemName: "ellipsis").foregroundStyle(.secondary)
@@ -455,20 +519,35 @@ struct SourceListView: View {
         URLComponents(string: url)?.host ?? url
     }
 
+    /// 「未分组」用的哨兵 key（真实分组名不可能等于它）
+    static let ungroupedKey = "\u{0}__ungrouped__"
+
+    /// 所有源里出现过的分组名（去重、按名称排序）
+    private var allGroups: [String] {
+        var set = Set<String>()
+        sources.forEach { $0.groupList.forEach { set.insert($0) } }
+        return set.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
     private var filtered: [ComicSource] {
         let base = searchText.isEmpty
             ? sources
             : sources.filter { $0.bookSourceName.contains(searchText) || $0.bookSourceUrl.contains(searchText) }
+        let byGroup = base.filter { s in
+            guard let f = groupFilter else { return true }
+            if f == Self.ungroupedKey { return s.groupList.isEmpty }
+            return s.groupList.contains(f)
+        }
         switch sortMode {
         case .manual:
-            return base
+            return byGroup
         case .name:
-            return base.sorted { $0.bookSourceName.localizedStandardCompare($1.bookSourceName) == .orderedAscending }
+            return byGroup.sorted { $0.bookSourceName.localizedStandardCompare($1.bookSourceName) == .orderedAscending }
         case .host:
-            return base.sorted { hostOf($0.bookSourceUrl) < hostOf($1.bookSourceUrl) }
+            return byGroup.sorted { hostOf($0.bookSourceUrl) < hostOf($1.bookSourceUrl) }
         case .enabled:
             // 启用的在前，停用的沉底；同组保持原顺序（稳定排序）
-            return base.sorted { $0.isEnabled && !$1.isEnabled }
+            return byGroup.sorted { $0.isEnabled && !$1.isEnabled }
         }
     }
 
