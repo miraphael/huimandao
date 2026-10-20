@@ -1,0 +1,226 @@
+[
+  {
+    "bookSourceName": "漫画网",
+    "bookSourceUrl": "https://www.manhua3.com",
+    "bookSourceGroup": "漫画",
+    "bookSourceType": 0,
+    "enable": true,
+    "serialNumber": 1,
+    "weight": 1,
+    "sourceRemark": "漫画网 manhua3.com。章节图片数据 AES-128-CBC 加密，正文规则用内置 hmd 桥解密；图片 CDN 的防盗链是「带任何 Referer 就返回占位图」，故 header 声明不发 Referer；章节地址用正则替换绕开 /jump 的 302（App 抓它只拿到空 body）。搜索有图形验证码（按频率触发），需先在「网页登录」里输一次验证码。",
+    "httpUserAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "header": "Referer: -",
+    "loginUrl": "https://www.manhua3.com/search?key=%E6%BC%AB%E7%94%BB",
+    "ruleSearchUrl": "/search?key={{key}}",
+    "ruleSearchList": "class.module-poster-item",
+    "ruleSearchName": "class.module-poster-item-title@text",
+    "ruleSearchNoteUrl": "href",
+    "ruleSearchCoverUrl": "img@data-original",
+    "ruleBookName": "h1@text",
+    "ruleBookAuthor": "class.module-info-item@text",
+    "ruleCoverUrl": "class.lazyload@data-original",
+    "ruleIntroduce": "class.module-info-introduction-content@text",
+    "ruleChapterList": "class.module-play-list-link",
+    "ruleChapterName": "title",
+    "ruleContentUrl": "href##/jump\\?url=%2F##/",
+    "ruleBookContent": "@js:var m=result.match(/params\\s*=\\s*'([^']+)'/);if(!m){''}else{var b=hmd.aesDecryptCBCBytes('39533824764a6e5532414e6553526f46','d894f36ec47225618dfe05a56a7fca59',m[1]);var i=0;while(i<b.length&&b[i]!==123){i++;}var u8=function(B){var o='',k=0;while(k<B.length){var c=B[k++];if(c<0x80){o+=String.fromCharCode(c);}else if(c<0xe0){o+=String.fromCharCode(((c&0x1f)<<6)|(B[k++]&0x3f));}else if(c<0xf0){o+=String.fromCharCode(((c&0x0f)<<12)|((B[k++]&0x3f)<<6)|(B[k++]&0x3f));}else{var cp=((c&7)<<18)|((B[k++]&0x3f)<<12)|((B[k++]&0x3f)<<6)|(B[k++]&0x3f);cp-=0x10000;o+=String.fromCharCode(0xd800+(cp>>10),0xdc00+(cp&0x3ff));}}return o;};var s=u8(b.slice(i));var e=s.lastIndexOf('}');var urls=[];try{var j=JSON.parse(s.slice(0,e+1));for(var n=0;n<j.images.length;n++){var t=j.images[n].split('/').pop();urls.push(hmd.atob(decodeURIComponent(t)));}}catch(x){urls=[];}JSON.stringify(urls);}",
+    "ruleFindUrl": "分类::https://www.manhua3.com/category/list/1",
+    "lastUpdateTime": 0
+  },
+  {
+    "bookSourceName": "瓜子漫画",
+    "bookSourceUrl": "https://www.guazimanhua.com",
+    "bookSourceGroup": "漫画",
+    "bookSourceType": 0,
+    "enable": true,
+    "serialNumber": 2,
+    "weight": 1,
+    "sourceRemark": "瓜子漫画 guazimanhua.com。搜索走 /category.php?keyword=（服务端渲染）；章节列表被 CSS 折叠但完整在 HTML 里，用 JS 提取去重并反转为正序；正文图是 section.reader-images 里的 img.reading-image，明文无加密、无防盗链。",
+    "httpUserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "ruleSearchUrl": "/category.php?keyword={{key}}&page={{page}}",
+    "ruleSearchList": "class.card",
+    "ruleSearchName": "tag.h3@text",
+    "ruleSearchNoteUrl": "tag.a@href",
+    "ruleSearchCoverUrl": "tag.img@src",
+    "ruleBookName": "tag.h1@text",
+    "ruleBookAuthor": "@js:(function(r){var m=(''+r).match(/author\\.php\\?name=([^\"&]+)/);return m?decodeURIComponent(m[1]):'';})(result)",
+    "ruleCoverUrl": "class.cinema-cover@src",
+    "ruleIntroduce": "class.mobile-comic-desc@text",
+    "ruleBookKind": "class.mobile-comic-tags@text",
+    "ruleChapterList": "-class.mobile-comic-all-chapters a",
+    "ruleChapterName": "text",
+    "ruleContentUrl": "href",
+    "ruleBookContent": "section.reader-images img@src",
+    "ruleFindUrl": "全部::https://www.guazimanhua.com/category.php?page={{page}}",
+    "lastUpdateTime": 0
+  },
+  {
+    "bookSourceName": "卡拉漫画",
+    "bookSourceUrl": "https://www.kalamanhua.com",
+    "bookSourceGroup": "漫画",
+    "bookSourceType": 0,
+    "enable": true,
+    "serialNumber": 3,
+    "weight": 1,
+    "sourceRemark": "卡拉漫画 kalamanhua.com（苹果CMS 模板）。站点首页有「点击完成验证」拦截，故 header/loginUrl 引导 WebView 过盾拿 omo_token；正文图在两级 iframe（image.kalaimg.top/play/min/）里，需两步取：章节页抽 hex → L1 取动态 token → 带 token 取阅读器页 → 抓 data-src。这条多级挑战流用**声明式 ruleContentFlow**（ContentFlowEngine 原生 HttpFetcher 执行，不走 JS 桥，真机稳定）描述，不写任何 Swift 专属代码。",
+    "httpUserAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "loginUrl": "https://www.kalamanhua.com/",
+    "ruleSearchUrl": "/search/wd/{{key}}.html",
+    "ruleSearchList": "class.stui-vodlist__box",
+    "ruleSearchName": "tag.a@title",
+    "ruleSearchNoteUrl": "tag.a@href",
+    "ruleSearchCoverUrl": "tag.a@data-original",
+    "ruleBookName": "tag.h1@text",
+    "ruleBookAuthor": "@js:var m=String(result).match(/作者：([\\s\\S]*?)<\\/p>/);m?m[1].replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').trim():''",
+    "ruleBookKind": "@js:var m=String(result).match(/类型：([\\s\\S]*?)<\\/p>/);m?m[1].replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').trim():''",
+    "ruleCoverUrl": "class.stui-content__thumb@tag.img@data-original",
+    "ruleIntroduce": "class.detail-sketch@text",
+    "ruleChapterList": "id.playlist1@tag.li",
+    "ruleChapterName": "tag.a@text",
+    "ruleContentUrl": "tag.a@href",
+    "ruleFindUrl": "中漫::https://www.kalamanhua.com/type/Cc-----.html\n日漫::https://www.kalamanhua.com/type/Jc-----.html\n韩漫::https://www.kalamanhua.com/type/Kc-----.html\n欧美漫::https://www.kalamanhua.com/type/Ec-----.html\n其他::https://www.kalamanhua.com/type/Oc-----.html",
+    "lastUpdateTime": 0,
+    "ruleContentFlow": [
+      {
+        "input": "chapterHtml",
+        "extract": {
+          "hex": "\"url\"\\s*:\\s*\"([0-9a-f]{32,})\""
+        }
+      },
+      {
+        "request": {
+          "url": "https://image.kalaimg.top/play/min/{hex}",
+          "headers": {
+            "User-Agent": "{ua}",
+            "Referer": "{chapterUrl}"
+          }
+        }
+      },
+      {
+        "input": "response",
+        "extract": {
+          "token": "token\\s*=\\s*['\"]([^'\"]+)['\"]"
+        }
+      },
+      {
+        "request": {
+          "url": "https://image.kalaimg.top/play/min/{hex}?cf_verify={token:urlenc}",
+          "headers": {
+            "User-Agent": "{ua}",
+            "Referer": "{chapterUrl}",
+            "Cookie": "omo_token={token}"
+          }
+        }
+      },
+      {
+        "input": "response",
+        "select": {
+          "regex": "data-src\\s*=\\s*['\"]([^'\"]+)['\"]",
+          "base": "https://image.kalaimg.top"
+        }
+      }
+    ]
+  },
+  {
+    "bookSourceName": "包子漫画",
+    "bookSourceUrl": "https://www.cnbzmg.com",
+    "bookSourceGroup": "漫画",
+    "bookSourceType": 0,
+    "enable": true,
+    "serialNumber": 4,
+    "weight": 1,
+    "sourceRemark": "包子漫画（开放入口 www.cnbzmg.com）。⚠️ 原 twmanga.com / twbzmg.com / baozimh.com 在国内 IP 下都会 302 到 cn.* 并 403 challenge_required（gatekeeper PoW，非 Cloudflare），故改用 cnbzmg。分类必须传 type+region+state+filter 四个参数。正文图统一走 static-tw.baozimh.com：s1/s2.bzcdn.net 对部分漫画会 302 到不可达的境外边缘节点 s1-mha1-nlams（一人之下、大奉打更人实测全挂），static-tw 同路径同分辨率、体积更小、速度更快且不经过死节点。",
+    "httpUserAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "loginUrl": "",
+    "ruleSearchUrl": "https://www.cnbzmg.com/search?q={{key}}",
+    "ruleSearchList": "class.comics-card",
+    "ruleSearchName": "tag.a@title",
+    "ruleSearchNoteUrl": "tag.a@href",
+    "ruleSearchCoverUrl": "tag.amp-img@src",
+    "ruleSearchAuthor": "class.tags@text",
+    "ruleBookName": "class.comics-detail__title@text",
+    "ruleBookAuthor": "class.comics-detail__author@text",
+    "ruleBookKind": "class.tag-list@text",
+    "ruleCoverUrl": "meta[name=\"og:image\"]@content",
+    "ruleIntroduce": "class.comics-detail__desc@text",
+    "ruleChapterList": "@css:div.section-title:contains(章節目錄)~div a.comics-chapters__item,div.section-title:contains(章节目录)~div a.comics-chapters__item||div.section-title:contains(最新章節)+div a.comics-chapters__item,div.section-title:contains(最新章节)+div a.comics-chapters__item",
+    "ruleChapterName": "text",
+    "ruleContentUrl": "href##/user/page_direct.comic_id=([A-Za-z0-9._-]+)[^A-Za-z0-9]+section_slot=([0-9]+)[^A-Za-z0-9]+chapter_slot=([0-9]+)##/comic/chapter/$1/$2_$3.html",
+    "ruleContentUrlNext": "text.點擊進入下一頁@href",
+    "ruleBookContent": "tag.img@src##https://s\\d\\.bzcdn\\.net##https://static-tw.baozimh.com",
+    "ruleFindUrl": "最新上架::https://www.cnbzmg.com/list/new\n全部::https://www.cnbzmg.com/classify?type=all&region=all&state=all&filter=%2a&page={{page}}\n中国::https://www.cnbzmg.com/classify?type=all&region=cn&state=all&filter=%2a&page={{page}}\n日本::https://www.cnbzmg.com/classify?type=all&region=jp&state=all&filter=%2a&page={{page}}\n韩国::https://www.cnbzmg.com/classify?type=all&region=kr&state=all&filter=%2a&page={{page}}\n欧美::https://www.cnbzmg.com/classify?type=all&region=en&state=all&filter=%2a&page={{page}}\n连载中::https://www.cnbzmg.com/classify?type=all&region=all&state=serial&filter=%2a&page={{page}}\n已完结::https://www.cnbzmg.com/classify?type=all&region=all&state=pub&filter=%2a&page={{page}}\n恋爱::https://www.cnbzmg.com/classify?type=lianai&region=all&state=all&filter=%2a&page={{page}}\n科幻::https://www.cnbzmg.com/classify?type=kehuan&region=all&state=all&filter=%2a&page={{page}}\n奇幻::https://www.cnbzmg.com/classify?type=qihuan&region=all&state=all&filter=%2a&page={{page}}\n玄幻::https://www.cnbzmg.com/classify?type=xuanhuan&region=all&state=all&filter=%2a&page={{page}}\n悬疑::https://www.cnbzmg.com/classify?type=xuanyi&region=all&state=all&filter=%2a&page={{page}}\n热血::https://www.cnbzmg.com/classify?type=rexie&region=all&state=all&filter=%2a&page={{page}}\n冒险::https://www.cnbzmg.com/classify?type=mouxian&region=all&state=all&filter=%2a&page={{page}}\n搞笑::https://www.cnbzmg.com/classify?type=gaoxiao&region=all&state=all&filter=%2a&page={{page}}\n都市::https://www.cnbzmg.com/classify?type=dushi&region=all&state=all&filter=%2a&page={{page}}\n古风::https://www.cnbzmg.com/classify?type=gufeng&region=all&state=all&filter=%2a&page={{page}}\n少年::https://www.cnbzmg.com/classify?type=shaonian&region=all&state=all&filter=%2a&page={{page}}\n后宫::https://www.cnbzmg.com/classify?type=hougong&region=all&state=all&filter=%2a&page={{page}}\n穿越::https://www.cnbzmg.com/classify?type=chuanyue&region=all&state=all&filter=%2a&page={{page}}\n日常::https://www.cnbzmg.com/classify?type=richang&region=all&state=all&filter=%2a&page={{page}}\n推理::https://www.cnbzmg.com/classify?type=tuili&region=all&state=all&filter=%2a&page={{page}}\n武侠::https://www.cnbzmg.com/classify?type=wuxia&region=all&state=all&filter=%2a&page={{page}}\n异能::https://www.cnbzmg.com/classify?type=yineng&region=all&state=all&filter=%2a&page={{page}}\n战争::https://www.cnbzmg.com/classify?type=zhanzheng&region=all&state=all&filter=%2a&page={{page}}",
+    "lastUpdateTime": 0
+  },
+  {
+    "bookSourceName": "W漫画",
+    "bookSourceUrl": "https://www.wmanhua.com",
+    "bookSourceGroup": "漫画",
+    "bookSourceType": 0,
+    "enable": true,
+    "serialNumber": 5,
+    "weight": 1,
+    "sourceRemark": "W漫画（wmanhua.com）。2026-10-18 新增。⚠️ 正文图是 JS 拼出来的：页面里只有 var num=eval(\"N\") 和 var pasd=\"…/\"，然后用 pasd+1..N+\".webp\" 生成 <img>，HTML 里没有任何图片地址 —— 所以用 ruleContentFlow 的**生成式**（extract num/pasd → select.template=\"{pasd}{i}.webp\" + count=\"{num}\"）。图床 image4.wmanhua.com 出 .webp，无需 Referer。搜索参数名是 query（不是 key）。 发现栏目用 /new、/hot、/sort（列表结构与搜索页一致，复用 ruleSearch* 规则）。⚠️ 漫画台「推荐」的图源下拉**只列有 ruleFindUrl 的源**，没有这个字段的源在那边看不到（2026-10-18 踩过）。 ⚠️ 章节分两段：详情页只渲染最近 20~24 章，「加载更多」是 **POST /comic/{id}**（body {}）返回 JSON 全量（实测 comic/930：HTML 24 章 vs API 121 章）。已用 ruleChapterApi 三件套（api/list/urlTemplate）拿全量。",
+    "httpUserAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "header": null,
+    "loginUrl": "",
+    "ruleSearchUrl": "/search?query={{key}}",
+    "ruleSearchList": "class.card-content",
+    "ruleSearchName": "class.cardtitle@text",
+    "ruleSearchNoteUrl": "tag.a@href",
+    "ruleSearchCoverUrl": "tag.img@data-src",
+    "ruleBookName": "tag.h1@text",
+    "ruleBookAuthor": "class.author@text##作者：##",
+    "ruleCoverUrl": "@css:img[data-src]@data-src",
+    "ruleIntroduce": "class.description@text",
+    "ruleChapterList": "@css:div.chapter-list a.chaper-btn",
+    "ruleChapterName": "text",
+    "ruleContentUrl": "href",
+    "ruleBookContent": "tag.img@data-src",
+    "ruleContentFlow": [
+      {
+        "input": "chapterHtml",
+        "extract": {
+          "num": "var\\s+num\\s*=\\s*eval\\(\"?(\\d+)\"?\\)",
+          "pasd": "var\\s+pasd\\s*=\\s*\"([^\"]+)\""
+        },
+        "select": {
+          "template": "{pasd}{i}.webp",
+          "count": "{num}"
+        }
+      }
+    ],
+    "lastUpdateTime": 0,
+    "ruleFindUrl": "最新::https://www.wmanhua.com/new\n热门::https://www.wmanhua.com/hot\n全部::https://www.wmanhua.com/sort",
+    "ruleChapterApi": "/comic/{id}",
+    "ruleChapterApiList": "$.data.chapters[*]",
+    "ruleChapterApiUrl": "/chapter/{contentId}-{id}.html"
+  },
+  {
+    "bookSourceName": "图库漫画",
+    "bookSourceUrl": "https://www.tuku.cc",
+    "bookSourceGroup": "漫画",
+    "bookSourceType": 0,
+    "enable": true,
+    "serialNumber": 6,
+    "weight": 1,
+    "sourceRemark": "图库漫画（tuku.cc）。2026-10-18 新增。搜索 /search?title={{key}}（参数名 title，翻页 &page=N）；列表 div.manga-content-item；详情 .info-text p.title / p.author（带「作者：」）/ .manga-desc；章节 a.chapter-item（详情页一次给全量，实测 422 章无需 API）；正文图在 img 的 data-original 上（懒加载），URL 带 ?cid=&key=&t= 签名参数 —— 已用 ## 正则剥掉查询串，靠 Referer 取图（图床 image1031.tuku.cc 无 Referer 返回 403，header 里显式写死站点 Referer）。发现栏目 /comics-p{{page}}/ 与 /comics-tagN-p{{page}}/（p1 等同首页）。 搜索翻页交给引擎自动追加 page=N（ruleSearchUrl 里不写 {{page}}，避免规则被 & 切断）。",
+    "httpUserAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "header": "Referer: https://www.tuku.cc/",
+    "loginUrl": "",
+    "ruleSearchUrl": "/search?title={{key}}",
+    "ruleSearchList": "class.manga-content-item",
+    "ruleSearchName": "@css:a.title@text",
+    "ruleSearchNoteUrl": "@css:a.manga-bg@href",
+    "ruleSearchCoverUrl": "tag.img@src",
+    "ruleBookName": "@css:.info-text p.title@text",
+    "ruleBookAuthor": "@css:.info-text p.author@text##作者：##",
+    "ruleCoverUrl": "@css:.info-card-wrap img@src",
+    "ruleIntroduce": "@css:.manga-desc@text",
+    "ruleChapterList": "class.chapter-item",
+    "ruleChapterName": "tag.p@text",
+    "ruleContentUrl": "href",
+    "ruleBookContent": "tag.img@data-original##\\?.*",
+    "ruleFindUrl": "全部::https://www.tuku.cc/comics-p{{page}}/\n热血::https://www.tuku.cc/comics-tag1-p{{page}}/\n恋爱::https://www.tuku.cc/comics-tag2-p{{page}}/\n校园::https://www.tuku.cc/comics-tag3-p{{page}}/\n百合::https://www.tuku.cc/comics-tag4-p{{page}}/\n彩虹::https://www.tuku.cc/comics-tag5-p{{page}}/\n冒险::https://www.tuku.cc/comics-tag6-p{{page}}/\n后宫::https://www.tuku.cc/comics-tag9-p{{page}}/\n治愈::https://www.tuku.cc/comics-tag10-p{{page}}/\n格斗::https://www.tuku.cc/comics-tag11-p{{page}}/\n悬疑::https://www.tuku.cc/comics-tag16-p{{page}}/\n推理::https://www.tuku.cc/comics-tag17-p{{page}}/\n搞笑::https://www.tuku.cc/comics-tag18-p{{page}}/\n奇幻::https://www.tuku.cc/comics-tag19-p{{page}}/\n魔法::https://www.tuku.cc/comics-tag20-p{{page}}/\n历史::https://www.tuku.cc/comics-tag24-p{{page}}/\n运动::https://www.tuku.cc/comics-tag29-p{{page}}/\n古风::https://www.tuku.cc/comics-tag31-p{{page}}/\n动作::https://www.tuku.cc/comics-tag32-p{{page}}/\n都市::https://www.tuku.cc/comics-tag33-p{{page}}/\n限制级::https://www.tuku.cc/comics-tag35-p{{page}}/",
+    "lastUpdateTime": 0
+  }
+]

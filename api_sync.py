@@ -42,7 +42,9 @@ API = f"https://api.github.com/repos/{REPO}"
 # ⚠️ 2026-10-16 补 `.circleci/`：GitHub Actions 封锁 + Codemagic 402 之后，
 #    把免费构建通道迁到 CircleCI（.circleci/config.yml）。
 #    同理漏登记 = 配置永远不会上远端，CI 读不到。
-INCLUDE_PREFIXES = ("绘漫岛/", ".github/", ".circleci/", "Vendor/", "WebResources/")
+INCLUDE_PREFIXES = ("绘漫岛/", ".github/", ".circleci/", "Vendor/", "WebResources/",
+                   # 2026-10-20 加：图源 JSON 放这里，供「图源二维码」指向 GitHub raw 稳定地址
+                   "sources/")
 # ⚠️ `api_sync.py` 也要放进来 —— 它在**根目录**，既不满足 INCLUDE_PREFIXES，
 #    之前也不在这个集合里，所以它自己从来没被同步过（远端那个是早期 git push 留下的）。
 #    同类问题：凡是被 CI 或工具链用到的根目录文件都要在这里登记。

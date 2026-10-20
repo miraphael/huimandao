@@ -1,0 +1,30 @@
+[
+  {
+    "bookSourceName": "图库漫画",
+    "bookSourceUrl": "https://www.tuku.cc",
+    "bookSourceGroup": "漫画",
+    "bookSourceType": 0,
+    "enable": true,
+    "serialNumber": 6,
+    "weight": 1,
+    "sourceRemark": "图库漫画（tuku.cc）。2026-10-18 新增。搜索 /search?title={{key}}（参数名 title，翻页 &page=N）；列表 div.manga-content-item；详情 .info-text p.title / p.author（带「作者：」）/ .manga-desc；章节 a.chapter-item（详情页一次给全量，实测 422 章无需 API）；正文图在 img 的 data-original 上（懒加载），URL 带 ?cid=&key=&t= 签名参数 —— 已用 ## 正则剥掉查询串，靠 Referer 取图（图床 image1031.tuku.cc 无 Referer 返回 403，header 里显式写死站点 Referer）。发现栏目 /comics-p{{page}}/ 与 /comics-tagN-p{{page}}/（p1 等同首页）。 搜索翻页交给引擎自动追加 page=N（ruleSearchUrl 里不写 {{page}}，避免规则被 & 切断）。 ⚠️ 发现栏目的卡片结构与搜索页不同（swiper-card-item vs manga-content-item）→ 搜索四条规则都用 `||` 双写，两种结构都能解析（引擎的 `||` 是「前一段为空才用后一段」）。",
+    "httpUserAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "header": "Referer: https://www.tuku.cc/",
+    "loginUrl": "",
+    "ruleSearchUrl": "/search?title={{key}}",
+    "ruleSearchList": "class.manga-content-item||class.swiper-card-item",
+    "ruleSearchName": "@css:a.title@text||@css:a.card-item-title@text",
+    "ruleSearchNoteUrl": "@css:a.manga-bg@href||@css:a.swiper-card-item-img@href",
+    "ruleSearchCoverUrl": "tag.img@src||tag.img@data-original",
+    "ruleBookName": "@css:.info-text p.title@text",
+    "ruleBookAuthor": "@css:.info-text p.author@text##作者：##",
+    "ruleCoverUrl": "@css:.info-card-wrap img@src",
+    "ruleIntroduce": "@css:.manga-desc@text",
+    "ruleChapterList": "class.chapter-item",
+    "ruleChapterName": "tag.p@text",
+    "ruleContentUrl": "href",
+    "ruleBookContent": "tag.img@data-original##\\?.*",
+    "ruleFindUrl": "全部::https://www.tuku.cc/comics-p{{page}}/\n热血::https://www.tuku.cc/comics-tag1-p{{page}}/\n恋爱::https://www.tuku.cc/comics-tag2-p{{page}}/\n校园::https://www.tuku.cc/comics-tag3-p{{page}}/\n百合::https://www.tuku.cc/comics-tag4-p{{page}}/\n彩虹::https://www.tuku.cc/comics-tag5-p{{page}}/\n冒险::https://www.tuku.cc/comics-tag6-p{{page}}/\n后宫::https://www.tuku.cc/comics-tag9-p{{page}}/\n治愈::https://www.tuku.cc/comics-tag10-p{{page}}/\n格斗::https://www.tuku.cc/comics-tag11-p{{page}}/\n悬疑::https://www.tuku.cc/comics-tag16-p{{page}}/\n推理::https://www.tuku.cc/comics-tag17-p{{page}}/\n搞笑::https://www.tuku.cc/comics-tag18-p{{page}}/\n奇幻::https://www.tuku.cc/comics-tag19-p{{page}}/\n魔法::https://www.tuku.cc/comics-tag20-p{{page}}/\n历史::https://www.tuku.cc/comics-tag24-p{{page}}/\n运动::https://www.tuku.cc/comics-tag29-p{{page}}/\n古风::https://www.tuku.cc/comics-tag31-p{{page}}/\n动作::https://www.tuku.cc/comics-tag32-p{{page}}/\n都市::https://www.tuku.cc/comics-tag33-p{{page}}/\n限制级::https://www.tuku.cc/comics-tag35-p{{page}}/",
+    "lastUpdateTime": 0
+  }
+]
