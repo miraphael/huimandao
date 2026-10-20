@@ -11,6 +11,7 @@ struct SourceQRExportView: View {
     let sources: [ComicSource]
 
     @State private var result: SourceQRCodec.Result? = nil
+    @State private var qrImage: UIImage? = nil
     @State private var failMsg: String? = nil
     @State private var toast: String? = nil
 
@@ -18,8 +19,8 @@ struct SourceQRExportView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    if let r = result {
-                        Image(uiImage: SourceQRCodec.image(r.payload) ?? UIImage())
+                    if let r = result, let img = qrImage {
+                        Image(uiImage: img)
                             .interpolation(.none)
                             .resizable()
                             .scaledToFit()
@@ -54,7 +55,7 @@ struct SourceQRExportView: View {
                         .padding(.horizontal, 16)
 
                         Button {
-                            if let img = SourceQRCodec.image(r.payload) {
+                            if let img = qrImage {
                                 UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
                                 toast = "已保存到相册"
                             }
@@ -71,6 +72,16 @@ struct SourceQRExportView: View {
 
                         Text("对方打开：App → 图源 → 导入图源 → 相机扫码")
                             .font(.caption).foregroundStyle(.secondary)
+                    } else if result != nil {
+                        // 有数据但画不出图 —— 明确报错，不要给用户一片空白
+                        VStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 40)).foregroundStyle(.orange)
+                            Text("二维码生成失败").font(.callout).fontWeight(.medium)
+                            Text("数据 \(result?.chars ?? 0) 字符，可能超出单张码容量")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 60)
                     } else {
                         VStack(spacing: 10) {
                             Image(systemName: "qrcode").font(.system(size: 40)).foregroundStyle(.secondary)
@@ -118,6 +129,7 @@ struct SourceQRExportView: View {
             return
         }
         result = r
+        qrImage = SourceQRCodec.image(r.payload)
         DiagLog.event("qr", "export",
                       "\(r.total) 个源 → 单张码 \(r.chars) 字符，实际含 \(r.included) 个，省略 \(r.dropped.joined(separator: "/"))")
     }

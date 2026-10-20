@@ -162,11 +162,28 @@ enum SourceQRCodec {
     /// - Parameter correction: `"L"` 容量最大（单张码必须用它）；`"M"` 更耐脏但容量小 10%。
     static func image(_ text: String, correction: String = "L", scale: CGFloat = 10) -> UIImage? {
         guard let data = text.data(using: .utf8),
-              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+              let filter = CIFilter(name: "CIQRCodeGenerator") else {
+            DiagLog.event("qr", "image", "❌ 拿不到 CIQRCodeGenerator")
+            return nil
+        }
         filter.setValue(data, forKey: "inputMessage")
         filter.setValue(correction, forKey: "inputCorrectionLevel")
-        guard let out = filter.outputImage else { return nil }
+        guard let out = filter.outputImage else {
+            // 数据超过该纠错等级容量时，outputImage 会是 nil
+            DiagLog.event("qr", "image", "❌ outputImage 为 nil（\(data.count) 字节，可能超容量）")
+            return nil
+        }
         let big = out.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        return UIImage(ciImage: big)
+
+        // 🔴 **必须转成 CGImage**。
+        //    `UIImage(ciImage:)` 是「懒」的 CIImage 包装，**没有 CGImage 备份** ——
+        //    放在 SwiftUI 的 `Image(uiImage:)` 里渲染出来是**空白**（v124 用户反馈「二维码不显示」）。
+        //    UIKit 的 UIImageView 能显示，SwiftUI 不行，所以必须过一次 CIContext。
+        let ctx = CIContext(options: nil)
+        guard let cg = ctx.createCGImage(big, from: big.extent) else {
+            DiagLog.event("qr", "image", "❌ CIContext 转 CGImage 失败")
+            return nil
+        }
+        return UIImage(cgImage: cg)
     }
 }
