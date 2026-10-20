@@ -102,44 +102,13 @@ struct SourceListView: View {
                            description: "点右上角 + 导入（粘贴 / 文件 / 局域网分享）")
             } else {
                     List {
-                        // 🔴 **JS 类源与规则类源合并成同一个列表** ——
-                        //    用户反馈：「我不喜欢看到 JS 的源单独被列出来，图源应该都在
-                        //    那个图源管理里面」。所以这里不再单开一个「JS 类图源」入口，
-                        //    而是把 JS 源**作为普通行**混排在主列表里（带 `{ }` 角标区分）。
-                        //    点进去直接开 JS 源编辑器，与规则源的编辑体验一致。
-                        if !groupByHost {
-                            ForEach(jsItems) { item in
-                                jsRow(item)
-                            }
-                        }
-                        // 按域名分组显示（对齐 Legado 的 menu_group_sources_by_domain）
-                        if groupByHost {
-                            ForEach(hostGroups, id: \.host) { g in
-                                Section {
-                                    ForEach(g.items) { s in
-                                        sourceRow(s)
-                                    }
-                                } header: {
-                                    HStack {
-                                        Text(g.host)
-                                        Spacer()
-                                        Text("\(g.items.count)").foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        } else {
-                            ForEach(filtered) { s in
-                                sourceRow(s)
-                            }
-                            // 手动排序：仅在「手动」模式下允许拖动
-                            .onMove { from, to in
-                                moveRows(from: from, to: to)
-                            }
-                        }
-                        // 多选模式的底部操作条（开源阅读那套：全选 / 反选 / 删除）
-                        .safeAreaInset(edge: .bottom) {
-                            if hasSelection { selectBar }
-                        }
+                        listContent
+                    }
+                    // 选中后的底部操作条：挂在 List 外层（原来嵌在 List 里，
+                    // 和 if/else 叠在一起把类型检查器压垮了 —— 报
+                    // "unable to type-check this expression in reasonable time"）
+                    .safeAreaInset(edge: .bottom) {
+                        if hasSelection { selectBar }
                     }
                     .environment(\.editMode, $editMode)
                     .transparentScrollBackground()
@@ -196,59 +165,7 @@ struct SourceListView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button { showImport = true } label: { Label("导入图源", systemImage: "square.and.arrow.down") }
-                        Menu {
-                            Button { groupFilter = nil } label: {
-                                Label("全部分组", systemImage: groupFilter == nil ? "checkmark" : "folder")
-                            }
-                            ForEach(allGroups, id: \.self) { g in
-                                Button { groupFilter = g } label: {
-                                    Label(g, systemImage: groupFilter == g ? "checkmark" : "folder")
-                                }
-                            }
-                            Button { groupFilter = Self.ungroupedKey } label: {
-                                Label("未分组", systemImage: groupFilter == Self.ungroupedKey ? "checkmark" : "tray")
-                            }
-                        } label: { Label("分组筛选", systemImage: "line.3.horizontal.decrease.circle") }
-                        Button { showGroupManage = true } label: { Label("分组管理", systemImage: "folder.badge.gearshape") }
-                        Toggle(isOn: $groupByHost) {
-                            Label("按域名分组显示", systemImage: "rectangle.3.group")
-                        }
-                        Button {
-                            sortMode = .manual
-                            withAnimation { editMode = (editMode == .active ? .inactive : .active) }
-                        } label: {
-                            Label(editMode == .active ? "完成排序" : "手动排序（拖动）",
-                                  systemImage: "arrow.up.arrow.down.square")
-                        }
-                        Menu {
-                            Picker("排序", selection: $sortMode) {
-                                ForEach(SourceSort.allCases, id: \.self) { m in
-                                    Text(m.title).tag(m)
-                                }
-                            }
-                        } label: { Label("排序", systemImage: "arrow.up.arrow.down") }
-                        Button { showEditor = true } label: { Label("新建图源", systemImage: "plus.square") }
-                        Button { exportAll() } label: { Label("导出全部", systemImage: "square.and.arrow.up") }
-                        Button {
-                            toast = "先勾选图源，再点底部 ⋯ →「导出选中为二维码」"
-                        } label: { Label("导出为二维码…", systemImage: "qrcode") }
-                        Button { exportEncrypted() } label: { Label("一键加密导出(S001)", systemImage: "lock") }
-                        Divider()
-                        Button { ComicRepository.shared.setAllSourcesEnabled(true); reload() } label: { Label("全部启用", systemImage: "checkmark.circle") }
-                        Button { ComicRepository.shared.setAllSourcesEnabled(false); reload() } label: { Label("全部停用", systemImage: "pause.circle") }
-                        Divider()
-                        Button { showCheck = true } label: { Label("图源检验(批量)", systemImage: "checkmark.seal") }
-                        Button { Task { await runUpdate() } } label: {
-                            Label(updating ? "正在更新… \(updateMsg)" : "从源仓库在线更新", systemImage: "arrow.down.circle")
-                        }
-                        .disabled(updating)
-                        Button { disableKnownBad() } label: {
-                            Label("停用已知不可用源(\(SourceHealth.badSources(sources).count))", systemImage: "exclamationmark.triangle")
-                        }
-                        Button { Task { await webShare() } } label: { Label("局域网分享(Web服务)", systemImage: "wifi") }
-                    } label: { Image(systemName: "plus") }
+                    toolbarMenu
                 }
             }
             .sheet(isPresented: $showImport) { ImportSheet(onDone: reload) }
@@ -441,29 +358,7 @@ struct SourceListView: View {
             barButton("启用", systemImage: "power") { enableSelection(true) }
             barButton("停用", systemImage: "pause") { enableSelection(false) }
             barButton("删除", systemImage: "trash", destructive: true) { pendingMultiDelete = true }
-            Menu {
-                Button { exportSelected() } label: { Label("导出选中为二维码", systemImage: "qrcode") }
-                Button { shareSelected() } label: { Label("分享选中（JSON 文件）", systemImage: "square.and.arrow.up") }
-                Divider()
-                Button { groupInput = ""; showGroupAdd = true } label: { Label("加入分组…", systemImage: "folder.badge.plus") }
-                Button { groupInput = ""; showGroupRemove = true } label: { Label("移出分组…", systemImage: "folder.badge.minus") }
-                Button { showGroupManage = true } label: { Label("分组管理…", systemImage: "folder.badge.gearshape") }
-                Divider()
-                Button { setExplore(true, urls: selectedURLs) } label: { Label("启用发现", systemImage: "square.grid.2x2") }
-                Button { setExplore(false, urls: selectedURLs) } label: { Label("禁用发现", systemImage: "square.grid.2x2.fill") }
-                Divider()
-                Button { moveToTop(selectedURLs) } label: { Label("置顶", systemImage: "arrow.up.to.line") }
-                Button { moveToBottom(selectedURLs) } label: { Label("置底", systemImage: "arrow.down.to.line") }
-                Divider()
-                Button { showCheck = true } label: { Label("图源检验", systemImage: "checkmark.seal") }
-                Button {
-                    selected.removeAll()
-                } label: { Label("取消选择", systemImage: "xmark.circle") }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.title3)
-                    .padding(.horizontal, 4)
-            }
+            selectMenu
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.bar)
@@ -488,6 +383,32 @@ struct SourceListView: View {
         .buttonStyle(.plain)
     }
 
+
+    /// 选择条的 ⋮ 菜单（拆出来避免和 HStack 一起超时）
+    private var selectMenu: some View {
+        Menu {
+            Button { exportSelected() } label: { Label("导出选中为二维码", systemImage: "qrcode") }
+            Button { shareSelected() } label: { Label("分享选中（JSON 文件）", systemImage: "square.and.arrow.up") }
+            Divider()
+            Button { groupInput = ""; showGroupAdd = true } label: { Label("加入分组…", systemImage: "folder.badge.plus") }
+            Button { groupInput = ""; showGroupRemove = true } label: { Label("移出分组…", systemImage: "folder.badge.minus") }
+            Button { showGroupManage = true } label: { Label("分组管理…", systemImage: "folder.badge.gearshape") }
+            Divider()
+            Button { setExplore(true, urls: selectedURLs) } label: { Label("启用发现", systemImage: "square.grid.2x2") }
+            Button { setExplore(false, urls: selectedURLs) } label: { Label("禁用发现", systemImage: "square.grid.2x2.fill") }
+            Divider()
+            Button { moveToTop(selectedURLs) } label: { Label("置顶", systemImage: "arrow.up.to.line") }
+            Button { moveToBottom(selectedURLs) } label: { Label("置底", systemImage: "arrow.down.to.line") }
+            Divider()
+            Button { showCheck = true } label: { Label("图源检验", systemImage: "checkmark.seal") }
+            Button { selected.removeAll() } label: { Label("取消选择", systemImage: "xmark.circle") }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.title3)
+                .padding(.horizontal, 4)
+        }
+    }
+
     /// 开源阅读的一行：`[☑ 名称（分组）] [红开关] [✏️] [⋮]`
     ///
     /// 🔴 **关键差异（对照 Legado 源码 `BookSourceAdapter` + `item_book_source.xml`）**：
@@ -505,23 +426,7 @@ struct SourceListView: View {
                     Image(systemName: isSel ? "checkmark.square.fill" : "square")
                         .font(.title3)
                         .foregroundStyle(isSel ? Color.accentColor : Color.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(displayName(s)).lineLimit(1)
-                            if !s.isEnabled {
-                                Text("已停用").font(.caption2).foregroundStyle(.secondary)
-                            }
-                            if SourceHealth.isStale(for: s) {
-                                Text("健康数据过期").font(.caption2).foregroundStyle(.secondary)
-                            } else if let h = SourceHealth.state(sourceUrl: s.bookSourceUrl), let b = h.badge {
-                                Text(b).font(.caption2)
-                                    .foregroundStyle(h.badgeIsBad ? .red : (h.isGood ? .green : .orange))
-                            }
-                        }
-                        Text(hostOf(s.bookSourceUrl) + (s.caps.badges.isEmpty ? "" : " · " + s.caps.badges.joined(separator: " ")))
-                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    sourceInfo(s)
                 }
                 .contentShape(Rectangle())
             }
@@ -574,6 +479,39 @@ struct SourceListView: View {
         }
     }
 
+    /// 行的两行文字（拆出来单独类型检查，避免整行表达式过大）
+    @ViewBuilder
+    private func sourceInfo(_ s: ComicSource) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(displayName(s)).lineLimit(1)
+                if !s.isEnabled {
+                    Text("已停用").font(.caption2).foregroundStyle(.secondary)
+                }
+                healthBadge(s)
+            }
+            Text(subtitle(s))
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func healthBadge(_ s: ComicSource) -> some View {
+        if SourceHealth.isStale(for: s) {
+            Text("健康数据过期").font(.caption2).foregroundStyle(.secondary)
+        } else if let h = SourceHealth.state(sourceUrl: s.bookSourceUrl), let b = h.badge {
+            Text(b).font(.caption2)
+                .foregroundStyle(h.badgeIsBad ? .red : (h.isGood ? .green : .orange))
+        }
+    }
+
+    /// 副标题：域名 + 能力徽标
+    private func subtitle(_ s: ComicSource) -> String {
+        let host = hostOf(s.bookSourceUrl)
+        return s.caps.badges.isEmpty ? host : host + " · " + s.caps.badges.joined(separator: " ")
+    }
+
     /// 显示名 = 名称（分组），对齐 Legado 的 `getDisPlayNameGroup()`
     private func displayName(_ s: ComicSource) -> String {
         let name = s.bookSourceName.isEmpty ? "(未命名)" : s.bookSourceName
@@ -618,6 +556,108 @@ struct SourceListView: View {
         var set = Set<String>()
         sources.forEach { $0.groupList.forEach { set.insert($0) } }
         return set.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+
+    /// 右上角「+」菜单（12 项，抽成独立属性 —— 和 List 放在同一表达式里会超时）
+    private var toolbarMenu: some View {
+        Menu {
+                        Button { showImport = true } label: { Label("导入图源", systemImage: "square.and.arrow.down") }
+                        Menu {
+                            Button { groupFilter = nil } label: {
+                                Label("全部分组", systemImage: groupFilter == nil ? "checkmark" : "folder")
+                            }
+                            ForEach(allGroups, id: \.self) { g in
+                                Button { groupFilter = g } label: {
+                                    Label(g, systemImage: groupFilter == g ? "checkmark" : "folder")
+                                }
+                            }
+                            Button { groupFilter = Self.ungroupedKey } label: {
+                                Label("未分组", systemImage: groupFilter == Self.ungroupedKey ? "checkmark" : "tray")
+                            }
+                        } label: { Label("分组筛选", systemImage: "line.3.horizontal.decrease.circle") }
+                        Button { showGroupManage = true } label: { Label("分组管理", systemImage: "folder.badge.gearshape") }
+                        Toggle(isOn: $groupByHost) {
+                            Label("按域名分组显示", systemImage: "rectangle.3.group")
+                        }
+                        Button {
+                            sortMode = .manual
+                            withAnimation { editMode = (editMode == .active ? .inactive : .active) }
+                        } label: {
+                            Label(editMode == .active ? "完成排序" : "手动排序（拖动）",
+                                  systemImage: "arrow.up.arrow.down.square")
+                        }
+                        Menu {
+                            Picker("排序", selection: $sortMode) {
+                                ForEach(SourceSort.allCases, id: \.self) { m in
+                                    Text(m.title).tag(m)
+                                }
+                            }
+                        } label: { Label("排序", systemImage: "arrow.up.arrow.down") }
+                        Button { showEditor = true } label: { Label("新建图源", systemImage: "plus.square") }
+                        Button { exportAll() } label: { Label("导出全部", systemImage: "square.and.arrow.up") }
+                        Button {
+                            toast = "先勾选图源，再点底部 ⋯ →「导出选中为二维码」"
+                        } label: { Label("导出为二维码…", systemImage: "qrcode") }
+                        Button { exportEncrypted() } label: { Label("一键加密导出(S001)", systemImage: "lock") }
+                        Divider()
+                        Button { ComicRepository.shared.setAllSourcesEnabled(true); reload() } label: { Label("全部启用", systemImage: "checkmark.circle") }
+                        Button { ComicRepository.shared.setAllSourcesEnabled(false); reload() } label: { Label("全部停用", systemImage: "pause.circle") }
+                        Divider()
+                        Button { showCheck = true } label: { Label("图源检验(批量)", systemImage: "checkmark.seal") }
+                        Button { Task { await runUpdate() } } label: {
+                            Label(updating ? "正在更新… \(updateMsg)" : "从源仓库在线更新", systemImage: "arrow.down.circle")
+                        }
+                        .disabled(updating)
+                        Button { disableKnownBad() } label: {
+                            Label("停用已知不可用源(\(SourceHealth.badSources(sources).count))", systemImage: "exclamationmark.triangle")
+                        }
+                        Button { Task { await webShare() } } label: { Label("局域网分享(Web服务)", systemImage: "wifi") }
+        } label: {
+            Image(systemName: "plus")
+        }
+    }
+
+    /// 列表内容：按域名分组 / 平铺（拆成独立子视图，避免类型检查超时）
+    @ViewBuilder
+    private var listContent: some View {
+        if groupByHost {
+            groupedRows
+        } else {
+            flatRows
+        }
+    }
+
+    /// 平铺：JS 源混排在前面 + 规则源（支持拖动排序）
+    @ViewBuilder
+    private var flatRows: some View {
+        ForEach(jsItems) { item in
+            jsRow(item)
+        }
+        ForEach(filtered) { s in
+            sourceRow(s)
+        }
+        .onMove { from, to in
+            moveRows(from: from, to: to)
+        }
+    }
+
+    /// 按域名分组显示（对齐 Legado 的 menu_group_sources_by_domain）
+    @ViewBuilder
+    private var groupedRows: some View {
+        ForEach(hostGroups, id: \.host) { g in
+            Section {
+                ForEach(g.items) { s in
+                    sourceRow(s)
+                }
+            } header: {
+                HStack {
+                    Text(g.host)
+                    Spacer()
+                    Text("\(g.items.count)").foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     private var filtered: [ComicSource] {
