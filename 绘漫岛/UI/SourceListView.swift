@@ -824,8 +824,14 @@ struct ImportSheet: View {
                 Section {
                     Button("导入并保存") {
                         let n = importText(text)
-                        resultMsg = n > 0 ? "✅ 成功导入 \(n) 条图源，可关闭本页" : "❌ 未识别到有效图源：请检查 JSON 格式（应为图源数组或单个对象）"
-                        if n > 0 { onDone() }
+                        if n > 0 {
+                            resultMsg = "✅ 成功导入 \(n) 条图源，可关闭本页"
+                            onDone()
+                        } else {
+                            let why = SourceCodec.diagnosis(text)
+                            resultMsg = "❌ " + why
+                            DiagLog.event("import", "paste", "解析失败：\(why)")
+                        }
                     }
                     .disabled(text.isEmpty)
                     if let msg = resultMsg {
@@ -840,16 +846,33 @@ struct ImportSheet: View {
                 NavigationStack { QRScannerView() }
             }
             .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.json, .text, .data]) { result in
-                if case .success(let url) = result {
-                    let secured = url.startAccessingSecurityScopedResource()
-                    if let t = try? String(contentsOf: url, encoding: .utf8) {
-                        let n = importText(t)
-                        resultMsg = n > 0 ? "✅ 从文件导入 \(n) 条图源" : "❌ 文件内容不是有效图源 JSON"
-                        if n > 0 { onDone() }
-                    } else {
-                        resultMsg = "❌ 文件读取失败"
-                    }
-                    if secured { url.stopAccessingSecurityScopedResource() }
+                guard case .success(let url) = result else {
+                    resultMsg = "❌ 没选到文件"
+                    return
+                }
+                let secured = url.startAccessingSecurityScopedResource()
+                defer { if secured { url.stopAccessingSecurityScopedResource() } }
+
+                // 🔴 按**字节**读，不要只认 UTF-8 —— Windows 记事本存的 GBK、
+                //    某些工具存的 UTF-16 都会让 `String(contentsOf:encoding:.utf8)` 直接失败，
+                //    表现就是「文件读取失败」，而同一份文件在别人手机上能导入。
+                guard let data = try? Data(contentsOf: url) else {
+                    resultMsg = "❌ 读不到文件（iCloud 未下载 / 无权限）。可改用「粘贴 JSON」"
+                    DiagLog.event("import", "file", "Data(contentsOf:) 失败")
+                    return
+                }
+                guard let t = SourceCodec.text(from: data), !t.isEmpty else {
+                    resultMsg = "❌ 文件是空的（\(data.count) 字节）"
+                    return
+                }
+                let n = importText(t)
+                if n > 0 {
+                    resultMsg = "✅ 从文件导入 \(n) 条图源"
+                    onDone()
+                } else {
+                    let why = SourceCodec.diagnosis(t)
+                    resultMsg = "❌ " + why
+                    DiagLog.event("import", "file", "解析失败 \(data.count) B：\(why)")
                 }
             }
             .onChange(of: pickedPhoto) { item in
@@ -893,6 +916,7 @@ struct ImportSheet: View {
     private func importText(_ t: String) -> Int {
         let list = SourceCodec.importJson(t)
         ComicRepository.shared.saveSources(list)
+        DiagLog.event("import", "ok", "\(t.count) 字符 → \(list.count) 条图源")
         return list.count
     }
 }

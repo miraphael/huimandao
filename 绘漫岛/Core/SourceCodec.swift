@@ -14,10 +14,83 @@ enum SourceCodec {
     /// 只解析不解密 —— 供需要「后台分批解密 + 边解边存」的调用方使用。
     /// ⚠️ 解密 535 源（1965 次 1024-bit RSA 模幂）要几十秒，绝不能同步跑在启动主线程，
     /// 否则会触发 0x8BADF00D 启动看门狗（scene-create 20s 超时）被直接 SIGKILL。
+    /// 清洗导入文本 —— **这是「别人导入失败、我却没问题」最常见的原因**。
+    ///
+    /// 实际遇到的脏数据：
+    /// · **BOM**：文件被某些编辑器/导出工具加了 `EF BB BF`，`hasPrefix("{")` 就 false，
+    ///   于是被当成「加密分享串」去解，必然失败。`trimmingCharacters(in: .whitespacesAndNewlines)`
+    ///   **不会**去掉 U+FEFF（它不算空白字符）。
+    /// · **零宽字符**：微信/QQ 复制时偶尔带 U+200B。
+    /// · **智能引号**：聊天软件把 `"` 转成 `“ ”`，JSON 直接解析不了。
+    /// · **全角逗号/冒号**：中文输入法手打 JSON 的常见后果。
+    static func normalize(_ text: String) -> String {
+        var t = text
+        // BOM / 零宽
+        t = t.replacingOccurrences(of: "\u{FEFF}", with: "")
+        t = t.replacingOccurrences(of: "\u{200B}", with: "")
+        t = t.replacingOccurrences(of: "\u{200C}", with: "")
+        t = t.replacingOccurrences(of: "\u{200D}", with: "")
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 把「中文标点」修成 JSON 能认的 ASCII 标点。
+    ///
+    /// 只在**正常解析失败之后**才调用 —— 直接全局替换会破坏字符串里本来就该是
+    /// 中文标点的内容（比如书名里的「，」），所以不能放进 `normalize`。
+    static func repairQuotes(_ text: String) -> String {
+        var t = text
+        t = t.replacingOccurrences(of: "\u{201C}", with: "\"")   // “
+        t = t.replacingOccurrences(of: "\u{201D}", with: "\"")   // ”
+        t = t.replacingOccurrences(of: "\u{2018}", with: "'")   // ‘
+        t = t.replacingOccurrences(of: "\u{2019}", with: "'")   // ’
+        // 全角逗号/冒号只在「引号外」才该换；这里保守处理：JSON 结构里出现全角，
+        // 基本可以确定是手打/输入法问题。
+        t = t.replacingOccurrences(of: "\u{FF0C}", with: ",")     // ，
+        t = t.replacingOccurrences(of: "\u{FF1A}", with: ":")     // ：
+        return t
+    }
+
+    /// 从任意编码的字节里取出文本。
+    ///
+    /// 文件导入原来只认 UTF-8 —— Windows 记事本存的 GBK、Excel 导出的 GB18030、
+    /// 部分工具存的 UTF-16 都会直接「文件读取失败」。
+    static func text(from data: Data) -> String? {
+        if data.isEmpty { return nil }
+        if let s = String(data: data, encoding: .utf8) { return s }
+        if let s = String(data: data, encoding: .utf16) { return s }
+        if let s = String(data: data, encoding: .utf16LittleEndian) { return s }
+        // GB18030（兼容 GBK / GB2312）
+        let gb = CFStringConvertEncodingToNSStringEncoding(
+            CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
+        if let s = String(data: data, encoding: String.Encoding(rawValue: gb)) { return s }
+        return String(data: data, encoding: .isoLatin1)
+    }
+
+    /// 导入失败时告诉用户**到底哪一步坏了**（原来只有一句「不是有效图源」）。
+    static func diagnosis(_ text: String) -> String {
+        let t = normalize(text)
+        if t.isEmpty { return "内容为空" }
+        if t.hasPrefix("{") || t.hasPrefix("[") {
+            // 看起来是 JSON，但解析不出源
+            let head = String(t.prefix(60)).replacingOccurrences(of: "\n", with: " ")
+            if t.contains("“") || t.contains("”") {
+                return "JSON 里的引号是中文引号（“ ”）—— 聊天软件复制时被转换了，请改用「从文件导入」"
+            }
+            if t.contains("，") && !t.contains(",") {
+                return "JSON 里的逗号是中文逗号（，）—— 请换成英文逗号"
+            }
+            return "JSON 结构不对，开头是：\(head)"
+        }
+        if t.hasPrefix(":_") {
+            return "这是「加密图源」密文，需要 App 升级到最新版才能导入"
+        }
+        return "既不是 JSON 也不是加密分享串，开头是：\(String(t.prefix(40)))"
+    }
+
     static func parseJson(_ text: String) -> [ComicSource] {
-        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = normalize(text)
         if !trimmed.hasPrefix("{") && !trimmed.hasPrefix("[") {
-            if let inflated = decompressShare(trimmed) { trimmed = inflated }
+            if let inflated = decompressShare(trimmed) { trimmed = normalize(inflated) }
         }
 
         // ── ① 先走 Legado 嵌套格式（`yuedu/shuyuan` 与绝大多数 GitHub 书源仓库）──
@@ -50,6 +123,14 @@ enum SourceCodec {
         if let one = try? JSONDecoder().decode(ComicSource.self, from: Data(trimmed.utf8)) {
             return [one]
         }
+        // ③ 兜底：把中文引号/逗号修成 ASCII 再试一次
+        //    （聊天软件复制会把 " 变成 “ ”，这是「我这边能导入、朋友那边不行」的典型原因）
+        let repaired = repairQuotes(trimmed)
+        if repaired != trimmed {
+            let fixed = parseJson(repaired)
+            if !fixed.isEmpty { return fixed }
+        }
+
         // 宽松解析：逐个提取 {...} 块
         var list: [ComicSource] = []
         let blocks = trimmed.split(separator: "\n").map(String.init)
