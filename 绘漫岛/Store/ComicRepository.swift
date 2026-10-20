@@ -169,6 +169,29 @@ final class ComicRepository {
         invalidateSourceCache()
     }
 
+    /// 批量启用/停用（多选操作条用）。
+    /// 一次事务搞定 —— 逐个调 `setEnable` 会反复 `invalidateSourceCache()` 并重建缓存。
+    func setEnable(urls: [String], enable: Bool) {
+        guard !urls.isEmpty else { return }
+        for u in urls {
+            Database.shared.exec("UPDATE COMIC_SOURCE_BEAN SET ENABLE=? WHERE BOOK_SOURCE_URL=?",
+                                 enable ? 1 : 0, u)
+        }
+        invalidateSourceCache()
+    }
+
+    /// 改图源分组（对齐 Legado 的「加入分组 / 移出分组」）。
+    /// 分组是逗号分隔的多值字段，与 Legado 一致（`bookSourceGroup`）。
+    func setSourceGroups(url: String, groups: [String]) {
+        let clean = groups.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        var seen = Set<String>()
+        let uniq = clean.filter { seen.insert($0).inserted }
+        Database.shared.exec("UPDATE COMIC_SOURCE_BEAN SET BOOK_SOURCE_GROUP=? WHERE BOOK_SOURCE_URL=?",
+                             uniq.joined(separator: ","), url)
+        invalidateSourceCache()
+    }
+
     private func rowToSource(_ row: [String: Any]) -> ComicSource? {
         guard let url = row["BOOK_SOURCE_URL"] as? String, !url.isEmpty else { return nil }
         var s = ComicSource()
