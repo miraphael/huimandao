@@ -5,8 +5,8 @@ import UIKit
 /// 相机扫码导入图源（放在「导入图源」页）。
 ///
 /// 能识别两种内容：
-///  1. `hmdqr|z|1/3|…` —— App「导出二维码」生成的分片，按顺序扫齐后拼回 JSON 导入；
-///  2. 普通网址 —— 保持老逻辑，App 自己下载后导入（兼容以前的相册识图）。
+///  1. `hmdqr|2|…` —— App 导出的**单张**图源码（LZMA + base64，解出来直接是 JSON）；
+///  2. 普通网址 —— 保持老逻辑，App 自己下载后导入。
 ///
 /// 🔴 **黑屏教训（v117 实测）**：预览层绝不能在 `makeUIView` 里 `layer.frame = view.bounds`
 /// —— 那一刻视图还没布局，bounds 是 `.zero`，层就是 0×0，表现为**全黑**。
@@ -17,10 +17,8 @@ struct QRScannerView: View {
 
     @State private var authorized = false
     @State private var denied = false
-    @State private var parts: [SourceQRCodec.Part] = []
     @State private var status = "把二维码放进取景框"
     @State private var finished = false
-    /// 导入成功后的源名称（要在界面上显示，不能只闪一下）
     @State private var importedNames: [String] = []
     /// 去抖：同一张码会连续回调几十次
     @State private var lastDecode = Date.distantPast
@@ -47,7 +45,23 @@ struct QRScannerView: View {
                 }
             }
 
-            // 导入成功的醒目提示（用户反馈：识别成功后要「在那里」也显示出来）
+            // 取景框放在**屏幕中间**（原来贴在底部，举着手很别扭）
+            VStack(spacing: 16) {
+                Spacer()
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color.white.opacity(0.92), lineWidth: 2.5)
+                    .frame(width: 260, height: 260)
+                Text(status)
+                    .font(.callout).fontWeight(.medium)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .background(.black.opacity(0.62), in: Capsule())
+                    .foregroundStyle(.white)
+                Spacer()
+            }
+            .padding(.vertical, 24)
+
+            // 导入成功面板
             if finished, !importedNames.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
@@ -73,21 +87,6 @@ struct QRScannerView: View {
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.15), lineWidth: 1))
                 .transition(.scale.combined(with: .opacity))
                 .animation(.spring(response: 0.32, dampingFraction: 0.8), value: finished)
-            }
-
-            // 取景框 + 状态
-            VStack {
-                Spacer()
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.white.opacity(0.9), lineWidth: 2)
-                    .frame(width: 250, height: 250)
-                Spacer().frame(height: 18)
-                Text(status)
-                    .font(.callout).fontWeight(.medium)
-                    .padding(.horizontal, 16).padding(.vertical, 9)
-                    .background(.black.opacity(0.62), in: Capsule())
-                    .foregroundStyle(.white)
-                    .padding(.bottom, 28)
             }
         }
         .navigationTitle("扫码导入图源")
@@ -128,8 +127,13 @@ struct QRScannerView: View {
         lastDecode = now
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let part = SourceQRCodec.decode(t) {
-            merge(part)
+        if SourceQRCodec.isSourceCode(t) {
+            // 单张图源码：直接解压还原，不用联网
+            if let json = SourceQRCodec.decode(t) {
+                finish(json)
+            } else {
+                status = "❌ 图源码解析失败（可能被遮挡）"
+            }
         } else if t.lowercased().hasPrefix("http") {
             status = "识别到网址，正在下载…"
             Task {
@@ -145,24 +149,6 @@ struct QRScannerView: View {
             }
         } else {
             status = "不是图源二维码：\(t.prefix(40))"
-        }
-    }
-
-    private func merge(_ p: SourceQRCodec.Part) {
-        // 收到不同 total 的分片 → 上一批没扫完，重来
-        if let first = parts.first, first.total != p.total {
-            parts = [p]
-            status = "换了新的一批，重新计数：1/\(p.total)"
-            return
-        }
-        if !parts.contains(where: { $0.index == p.index }) {
-            parts.append(p)
-        }
-        if parts.count >= p.total, let json = SourceQRCodec.assemble(parts) {
-            DiagLog.event("qr", "import", "扫码拼回 \(p.total) 片，\(json.count) 字符")
-            finish(json)
-        } else {
-            status = "已收 \(parts.count)/\(p.total) 张，继续扫"
         }
     }
 
@@ -190,7 +176,6 @@ private struct CameraPreview: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let v = PreviewUIView(frame: .zero)
         v.backgroundColor = .black
-        v.onDecode = onDecode
 
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device),
@@ -227,7 +212,6 @@ private struct CameraPreview: UIViewRepresentable {
     final class PreviewUIView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         let session = AVCaptureSession()
-        var onDecode: ((String) -> Void)?
     }
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {

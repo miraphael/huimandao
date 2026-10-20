@@ -2,115 +2,165 @@ import CoreImage
 import Foundation
 import UIKit
 
-/// 图源二维码：压缩 + 分片协议 + 图片生成。
+/// 图源二维码：**永远只有一张**。
 ///
-/// ## 容量账（实测，决定分片大小）
-/// 图库漫画单个源 JSON 3336 字节 → zlib 压缩 **1437**（43%）→ base64 **1916** 字符。
-/// 六源合集 17496 → 5342 → base64 7124。
-/// 一个二维码 L 级纠错能装约 **2200 字符**，所以：
-///   · 选 1 个源 → **正好 1 张码**
-///   · 六源合集 → 4 张
+/// ## 容量上限是硬约束
+/// 一个二维码（L 级纠错、版本 40）最多装 **2953 字节**。为了让「无论多少图源都只有一张码」
+/// 尽可能成立，这里叠了三层压缩：
+///
+/// 1. **短键名打包**：33 个字段压成「按固定顺序的数组」，省掉每个源的键名（约 16%）
+/// 2. **LZMA**：比 zlib 再小 8%~10%（图源 JSON 字段高度重复）
+/// 3. **base64**：二维码只能装文本，base64 有 33% 膨胀 —— 这就是最后的天花板
+///
+/// 实测（6 个源，15765 B）：
+/// ```
+/// 原样                      6165 字符  ❌
+/// 去备注                    3555 字符  ❌
+/// 去备注 + 发现栏目          2944 字符  ✅ 刚好
+/// 再去 UA                   2731 字符  ✅
+/// ```
+/// 所以按「备注 → 发现栏目 → UA」逐级丢弃，尽量塞进一张；仍装不下就只导前 N 个源，
+/// 并在导出页把「丢了什么、少了几个」写清楚 —— **不静默丢数据**。
 ///
 /// ## 协议
 /// ```
-/// hmdqr|<压缩标记>|<当前序号>/<总片数>|<base64 分片>
+/// hmdqr|2|<base64(LZMA(JSON 数组))>
 /// ```
-/// - `<压缩标记>`：`z` = zlib 压缩过；`r` = 原文（压缩反而更大的极端情况）
-/// - 前缀 `hmdqr|` 用来区分「分片数据」和「普通网址」；非前缀内容继续按 URL 处理，
-///   老的相册识图逻辑不受影响。
+/// 数组 = `[[值…], …]`，每行按 `fields` 的固定顺序取值，空值用 `null`。
 enum SourceQRCodec {
 
     static let prefix = "hmdqr|"
+    static let version = "2"
 
-    /// 每片最大字符数。2200 ≈ 一个二维码 L 纠错下的容量上限，
-    /// 选它是为了让「1 个源只出 1 张码」。代价是码偏密——扫不上就换 `chunkLengthM`。
-    static let chunkLength = 2200
+    /// 打包顺序 —— **编码和解码必须完全一致**，改动就要升 version。
+    static let fields: [String] = [
+        "bookSourceGroup", "bookSourceName", "bookSourceType", "bookSourceUrl",
+        "enable", "header", "httpUserAgent", "lastUpdateTime", "loginUrl",
+        "ruleBookAuthor", "ruleBookContent", "ruleBookKind", "ruleBookName",
+        "ruleChapterApi", "ruleChapterApiList", "ruleChapterApiUrl",
+        "ruleChapterList", "ruleChapterName", "ruleContentFlow",
+        "ruleContentUrl", "ruleContentUrlNext", "ruleCoverUrl",
+        "ruleFindUrl", "ruleIntroduce",
+        "ruleSearchAuthor", "ruleSearchCoverUrl", "ruleSearchList", "ruleSearchName",
+        "ruleSearchNoteUrl", "ruleSearchUrl",
+        "serialNumber", "sourceRemark", "weight",
+    ]
 
-    /// 兜底：码太密扫不上时用这个（每片更短 → 码更稀 → 张数更多）
-    static let chunkLengthM = 1200
+    /// 单张二维码的安全容量。
+    ///
+    /// 理论极限是 **2953 字符**（L 级、版本 40）。这里取 2800，留 5% 余量 ——
+    /// 因为 Apple 的 LZMA 与 Python 实测有 ±100 字节差异，卡在 2900 有「超限后
+    /// CIQRCodeGenerator 直接返回 nil（生成不出码）」的风险。
+    static let maxChars = 2800
 
-    struct Part {
-        let index: Int      // 从 1 开始
-        let total: Int
-        let packed: Bool    // true = zlib
-        let data: String    // base64 分片
+    struct Result {
+        var payload: String
+        var included: Int
+        var total: Int
+        var dropped: [String]
+        var chars: Int
     }
 
     // MARK: - 编码
 
-    /// 把图源 JSON 编码成 N 个二维码内容（至少 1 个）
-    static func encode(json: String, chunk: Int = chunkLength) -> [String] {
-        let raw = Data(json.utf8)
-        guard !raw.isEmpty else { return [] }
-        // 压一压：图源 JSON 字段名高度重复，实测压缩率 40%~70%。
-        // 🔴 `NSData.compressed` 返回 **NSData**，`try?` 之后是 `NSData?`，
-        //    不能和 `Data()` 一起 `??`（编译报 binary operator '??' cannot be applied）。
-        //    必须先桥接 `as Data`。
-        var zipped = Data()
-        if let n = try? (raw as NSData).compressed(using: .zlib) { zipped = n as Data }
-        let useZip = zipped.count > 0 && zipped.count < raw.count
-        let b64 = (useZip ? zipped : raw).base64EncodedString()
-        guard !b64.isEmpty else { return [] }
+    /// 把图源 JSON 编码成**一张**二维码的内容。
+    static func encode(json: String) -> Result? {
+        guard let data = json.data(using: .utf8),
+              let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]],
+              !arr.isEmpty else { return nil }
 
-        var parts: [String] = []
-        var i = b64.startIndex
-        while i < b64.endIndex {
-            let j = b64.index(i, offsetBy: chunk, limitedBy: b64.endIndex) ?? b64.endIndex
-            parts.append(String(b64[i..<j]))
-            i = j
+        // 逐级降级：备注 → 发现栏目 → UA
+        let tiers: [(drop: [String], note: [String])] = [
+            (["sourceRemark"], ["源备注"]),
+            (["sourceRemark", "ruleFindUrl"], ["源备注", "发现栏目"]),
+            (["sourceRemark", "ruleFindUrl", "httpUserAgent"], ["源备注", "发现栏目", "自定义 UA"]),
+        ]
+
+        for (drop, note) in tiers {
+            let packed = pack(arr, drop: Set(drop))
+            if let payload = build(packed), payload.count <= maxChars {
+                return Result(payload: payload, included: arr.count, total: arr.count,
+                              dropped: note, chars: payload.count)
+            }
         }
-        let total = parts.count
-        let flag = useZip ? "z" : "r"
-        return parts.enumerated().map { idx, s in
-            String(format: "%@%@|%d/%d|%@", prefix, flag, idx + 1, total, s)
+
+        // 还是装不下 → 二分找能装下的最大源数
+        let drop = Set(["sourceRemark", "ruleFindUrl", "httpUserAgent"])
+        var lo = 1, hi = arr.count, best = 0
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if let p = build(pack(Array(arr.prefix(mid)), drop: drop)), p.count <= maxChars {
+                best = mid; lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
         }
+        guard best > 0,
+              let payload = build(pack(Array(arr.prefix(best)), drop: drop)) else { return nil }
+        return Result(payload: payload, included: best, total: arr.count,
+                      dropped: ["源备注", "发现栏目", "自定义 UA",
+                                "仅含前 \(best) 个源（其余超出单张码容量）"],
+                      chars: payload.count)
+    }
+
+    /// 打包成「数组的数组」：键名全省掉
+    private static func pack(_ list: [[String: Any]], drop: Set<String>) -> [[Any]] {
+        list.map { src in
+            fields.map { key -> Any in
+                if drop.contains(key) { return NSNull() }
+                guard let v = src[key] else { return NSNull() }
+                if v is NSNull { return NSNull() }
+                if let s = v as? String, s.isEmpty { return NSNull() }
+                return v
+            }
+        }
+    }
+
+    /// 压缩 + 加前缀
+    private static func build(_ packed: [[Any]]) -> String? {
+        guard let json = try? JSONSerialization.data(withJSONObject: packed),
+              let zip = try? (json as NSData).compressed(using: .lzma) else { return nil }
+        return "\(prefix)\(version)|\((zip as Data).base64EncodedString())"
     }
 
     // MARK: - 解码
 
-    /// 解析扫到的一段；不是分片协议（比如是个网址）返回 nil
-    static func decode(_ scanned: String) -> Part? {
-        let s = scanned.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard s.hasPrefix(prefix) else { return nil }
-        let rest = String(s.dropFirst(prefix.count))            // "z|1/4|base64…"
-        let segs = rest.split(separator: "|", maxSplits: 2).map(String.init)
-        guard segs.count == 3 else { return nil }
-        let flag = segs[0]
-        let head = segs[1].split(separator: "/", maxSplits: 1).map(String.init)
-        guard head.count == 2, let idx = Int(head[0]), let total = Int(head[1]),
-              idx >= 1, idx <= total, total >= 1 else { return nil }
-        return Part(index: idx, total: total, packed: flag == "z", data: segs[2])
+    /// 是不是本 App 生成的图源码（用来和「网址码」区分）
+    static func isSourceCode(_ s: String) -> Bool {
+        s.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("\(prefix)\(version)|")
     }
 
-    /// 把收齐的分片拼回原始 JSON。**没收齐 / 解压失败都返回 nil**。
-    static func assemble(_ parts: [Part]) -> String? {
-        guard let first = parts.first else { return nil }
-        let total = first.total
-        guard total >= 1, parts.count == total else { return nil }
-        guard Set(parts.map(\.index)).count == total else { return nil }
-        var b64 = ""
-        for i in 1...total {
-            guard let p = parts.first(where: { $0.index == i }) else { return nil }
-            b64 += p.data
+    /// 解出图源 JSON；不是本格式返回 nil
+    static func decode(_ scanned: String) -> String? {
+        let t = scanned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix("\(prefix)\(version)|") else { return nil }
+        let body = String(t.dropFirst("\(prefix)\(version)|".count))
+        guard let zip = Data(base64Encoded: body),
+              let raw = try? (zip as NSData).decompressed(using: .lzma),
+              let arr = (try? JSONSerialization.jsonObject(with: raw as Data)) as? [[Any]]
+        else { return nil }
+
+        var out: [[String: Any]] = []
+        for row in arr {
+            var dict: [String: Any] = [:]
+            for (i, key) in fields.enumerated() where i < row.count {
+                let v = row[i]
+                if v is NSNull { continue }
+                dict[key] = v
+            }
+            out.append(dict)
         }
-        guard let data = Data(base64Encoded: b64) else { return nil }
-        if first.packed {
-            // 同样：`NSData.decompressed` 返回 NSData，先桥接再解字符串
-            guard let n = try? (data as NSData).decompressed(using: .zlib) else { return nil }
-            let un = n as Data
-            return String(data: un, encoding: .utf8)
-        }
-        return String(data: data, encoding: .utf8)
+        guard let json = try? JSONSerialization.data(withJSONObject: out),
+              let text = String(data: json, encoding: .utf8) else { return nil }
+        return text
     }
 
     // MARK: - 图片
 
     /// 生成二维码图片。用系统 `CIQRCodeGenerator`，不引第三方库。
     ///
-    /// - Parameter correction: `"L"` 容量大、容错低（适合屏幕上这种干净场景）；
-    ///   `"M"` 更耐脏但容量小 ~10%。扫码困难时改用 `"M"`（更稀）。
-    /// - Parameter scale: 整数倍放大。滤镜默认 1 像素/模块，直接放大会糊。
-    static func image(_ text: String, correction: String = "L", scale: CGFloat = 12) -> UIImage? {
+    /// - Parameter correction: `"L"` 容量最大（单张码必须用它）；`"M"` 更耐脏但容量小 10%。
+    static func image(_ text: String, correction: String = "L", scale: CGFloat = 10) -> UIImage? {
         guard let data = text.data(using: .utf8),
               let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         filter.setValue(data, forKey: "inputMessage")

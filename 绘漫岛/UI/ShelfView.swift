@@ -437,16 +437,16 @@ struct ShelfPanelGrid: View {
                                                         .stack([a, b], flex: 1)]))
                 i += 3
             case 1 where left >= 3:
-                let ps = (0..<3).map { ShelfPanel(item: items[i + $0], height: 104) }
+                let ps = (0..<3).map { ShelfPanel(item: items[i + $0], height: 132) }
                 out.append(ShelfPanelRow(id: n, slots: ps.map { .single($0, flex: 1) }))
                 i += 3
             case 2:
                 out.append(ShelfPanelRow(id: n,
-                                         slots: [.single(ShelfPanel(item: items[i], height: 118), flex: 1)]))
+                                         slots: [.single(ShelfPanel(item: items[i], height: 168), flex: 1)]))
                 i += 1
             default:
                 let take = min(left, 3)
-                let ps = (0..<take).map { ShelfPanel(item: items[i + $0], height: 104) }
+                let ps = (0..<take).map { ShelfPanel(item: items[i + $0], height: 132) }
                 out.append(ShelfPanelRow(id: n, slots: ps.map { .single($0, flex: 1) }))
                 i += take
             }
@@ -467,10 +467,11 @@ struct MangaShelfCell: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            CoverImage(url: item.coverUrl)
+            CoverImage(url: item.coverUrl, fit: true)
                 .grayscale(1)
                 .frame(maxWidth: .infinity)
                 .frame(height: panelHeight)
+                .background(Self.paper)   // 留白处是纸色，不是灰块
                 .clipped()
 
             VStack(spacing: 0) {
@@ -531,13 +532,21 @@ struct CoverImage: View {
     /// 防盗链头；留空时由 `ComicRepository` 按域名反查图源的 Referer / UA。
     var referer: String = ""
     var ua: String = ""
+    /// `true` = 完整显示整张封面（不裁切、不拉伸），空白处留底色。
+    /// 「黑白纸」主题用它 —— 用户反馈：原来 aspectFill 把 2:3 的封面裁成一条，
+    /// 看着像被压扁了。
+    var fit: Bool = false
     @State private var image: UIImage?
 
     var body: some View {
         ZStack {
             Rectangle().fill(.gray.opacity(0.15))
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                if fit {
+                    Image(uiImage: image).resizable().scaledToFit()
+                } else {
+                    Image(uiImage: image).resizable().scaledToFill()
+                }
             } else {
                 Image(systemName: "photo").foregroundStyle(.secondary)
             }

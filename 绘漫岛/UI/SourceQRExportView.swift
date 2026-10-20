@@ -1,92 +1,91 @@
 import SwiftUI
 import UIKit
 
-/// 图源 → 二维码（放在「图源管理」页：多选后点底部「二维码」）。
+/// 图源 → 二维码（**永远一张**）。
 ///
-/// 一份图源 JSON 往往有几十 KB，一个二维码装不下，所以会生成**多张码**，
-/// 用 TabView 左右翻，对方按顺序扫完即可还原（见 `SourceQRCodec`）。
-///
-/// **压缩后 1 个源 ≈ 1 张码**（实测：单源 3336 字节 → zlib 1437 → base64 1916，
-/// 一个二维码 L 纠错能装约 2200 字符）。选得越多张数越多。
+/// 一个二维码最多 2953 字节，所以导出时按「备注 → 发现栏目 → UA」逐级丢弃 + LZMA 压缩，
+/// 尽量把选中的源全塞进一张；实在装不下只带前 N 个，并在这里写清楚。
 struct SourceQRExportView: View {
     @Environment(\.dismiss) private var dismiss
-    /// 要导出的源；空数组表示「导出全部已启用的」
+    /// 要导出的源；空数组表示「全部已启用的」
     let sources: [ComicSource]
 
-    /// 纠错等级：`L` 容量大、码更密；`M` 码更稀、更容易扫，但张数更多
-    @State private var dense = true
-    @State private var codes: [String] = []
-    @State private var total: Int = 0
+    @State private var result: SourceQRCodec.Result? = nil
     @State private var failMsg: String? = nil
     @State private var toast: String? = nil
 
-    private var chunk: Int { dense ? SourceQRCodec.chunkLength : SourceQRCodec.chunkLengthM }
-    private var correction: String { dense ? "L" : "M" }
-
     var body: some View {
         NavigationStack {
-            Group {
-                if codes.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "qrcode").font(.system(size: 44)).foregroundStyle(.secondary)
-                        Text(failMsg ?? "正在生成…").font(.callout).foregroundStyle(.secondary)
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        TabView {
-                            ForEach(Array(codes.enumerated()), id: \.offset) { i, code in
-                                VStack(spacing: 10) {
-                                    if let img = SourceQRCodec.image(code, correction: correction) {
-                                        Image(uiImage: img)
-                                            .interpolation(.none)
-                                            .resizable()
-                                            .scaledToFit()
-                                            .padding(14)
-                                            .background(Color.white)
-                                            .overlay(Rectangle().stroke(Color.primary.opacity(0.85), lineWidth: 2))
-                                            .padding(.horizontal, codes.count > 1 ? 34 : 26)
-                                    }
-                                    Text(codes.count > 1 ? "第 \(i + 1) / \(codes.count) 张" : "单张即可")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
+            ScrollView {
+                VStack(spacing: 16) {
+                    if let r = result {
+                        Image(uiImage: SourceQRCodec.image(r.payload) ?? UIImage())
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .padding(12)
+                            .background(Color.white)
+                            .overlay(Rectangle().stroke(Color.primary.opacity(0.85), lineWidth: 2))
+                            .padding(.horizontal, 18)
+                            .padding(.top, 8)
+
+                        VStack(spacing: 6) {
+                            Text("共 \(r.included) 个图源 · 单张二维码")
+                                .font(.callout).fontWeight(.medium)
+                            Text("压缩后 \(r.chars) / \(SourceQRCodec.maxChars) 字符")
+                                .font(.caption2).foregroundStyle(.secondary)
+
+                            if r.included < r.total {
+                                Label("只包含了前 \(r.included) 个源（其余超出单张码容量）",
+                                      systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                    .padding(.top, 2)
+                            }
+
+                            if !r.dropped.isEmpty {
+                                Text("为塞进一张，已省略：" + r.dropped.joined(separator: "、"))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 20)
                             }
                         }
-                        .tabViewStyle(.page(indexDisplayMode: codes.count > 1 ? .always : .never))
-                        .indexViewStyle(.page(backgroundDisplayMode: .always))
+                        .padding(.horizontal, 16)
 
-                        VStack(spacing: 8) {
-                            Text("对方打开：App → 图源 → 导入图源 → 相机扫码，按顺序扫完这 \(codes.count) 张")
-                                .font(.caption)
-                            Text("\(total) 个图源 · \(dense ? "高密度(张数少)" : "低密度(更好扫)")")
-                                .font(.caption2).foregroundStyle(.secondary)
+                        Button {
+                            if let img = SourceQRCodec.image(r.payload) {
+                                UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+                                toast = "已保存到相册"
+                            }
+                        } label: {
+                            Label("保存到相册", systemImage: "square.and.arrow.down")
+                                .font(.callout).fontWeight(.medium)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Color(.secondarySystemGroupedBackground),
+                                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
-                        .padding(.vertical, 10)
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 18)
+
+                        Text("对方打开：App → 图源 → 导入图源 → 相机扫码")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        VStack(spacing: 10) {
+                            Image(systemName: "qrcode").font(.system(size: 40)).foregroundStyle(.secondary)
+                            Text(failMsg ?? "正在生成…").font(.callout).foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 60)
                     }
                 }
+                .padding(.bottom, 28)
             }
             .navigationTitle("图源二维码")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("关闭") { dismiss() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Toggle(isOn: $dense) {
-                            Label(dense ? "高密度（张数少）" : "低密度（更好扫）", systemImage: "dial.low")
-                        }
-                        Divider()
-                        Button {
-                            saveAll()
-                        } label: { Label("保存全部到相册", systemImage: "square.and.arrow.down") }
-                        .disabled(codes.isEmpty)
-                    } label: { Image(systemName: "ellipsis.circle") }
-                }
+                ToolbarItem(placement: .topBarLeading) { Button("关闭") { dismiss() } }
             }
-            .alert("图源二维码", isPresented: Binding(get: { failMsg != nil },
-                                                     set: { if !$0 { failMsg = nil } })) {
-                Button("知道了") { dismiss() }
-            } message: { Text(failMsg ?? "") }
             .safeAreaInset(edge: .bottom) {
                 if let toast {
                     Text(toast)
@@ -95,14 +94,13 @@ struct SourceQRExportView: View {
                         .background(.ultraThinMaterial, in: Capsule())
                         .padding(.bottom, 8)
                         .onAppear {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                                 if self.toast == toast { self.toast = nil }
                             }
                         }
                 }
             }
             .onAppear { rebuild() }
-            .onChange(of: dense) { _ in rebuild() }
         }
     }
 
@@ -110,26 +108,17 @@ struct SourceQRExportView: View {
         let list = sources.isEmpty
             ? ComicRepository.shared.allSources(includeDisabled: false)
             : sources
-        total = list.count
-        guard total > 0 else {
-            codes = []
+        guard !list.isEmpty else {
             failMsg = "没有可导出的图源"
             return
         }
-        // 🔴 必须 **pretty: false**：压缩后的 JSON 才可能少几张码。
         let json = SourceCodec.exportJson(list, pretty: false)
-        codes = SourceQRCodec.encode(json: json, chunk: chunk)
-        DiagLog.event("qr", "export",
-                      "\(total) 个源 → \(codes.count) 张码（\(json.count) 字符 → 压缩后 \(dense ? "L" : "M") 级）")
-    }
-
-    private func saveAll() {
-        var ok = 0
-        for code in codes {
-            guard let img = SourceQRCodec.image(code, correction: correction) else { continue }
-            UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
-            ok += 1
+        guard let r = SourceQRCodec.encode(json: json) else {
+            failMsg = "生成失败（数据异常）"
+            return
         }
-        toast = ok == codes.count ? "已保存 \(ok) 张到相册" : "只保存成功 \(ok)/\(codes.count) 张"
+        result = r
+        DiagLog.event("qr", "export",
+                      "\(r.total) 个源 → 单张码 \(r.chars) 字符，实际含 \(r.included) 个，省略 \(r.dropped.joined(separator: "/"))")
     }
 }

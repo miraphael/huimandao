@@ -355,8 +355,6 @@ struct SourceListView: View {
                       action: selectAll)
             barButton("反选", systemImage: "arrow.triangle.2.circlepath", action: invertSelection)
             Spacer(minLength: 6)
-            barButton("启用", systemImage: "power") { enableSelection(true) }
-            barButton("停用", systemImage: "pause") { enableSelection(false) }
             barButton("删除", systemImage: "trash", destructive: true) { pendingMultiDelete = true }
             selectMenu
         }
@@ -388,6 +386,9 @@ struct SourceListView: View {
     private var selectMenu: some View {
         Menu {
             Button { exportSelected() } label: { Label("导出选中为二维码", systemImage: "qrcode") }
+            Divider()
+            Button { enableSelection(true) } label: { Label("启用选中", systemImage: "power") }
+            Button { enableSelection(false) } label: { Label("停用选中", systemImage: "pause") }
             Button { shareSelected() } label: { Label("分享选中（JSON 文件）", systemImage: "square.and.arrow.up") }
             Divider()
             Button { groupInput = ""; showGroupAdd = true } label: { Label("加入分组…", systemImage: "folder.badge.plus") }
@@ -419,12 +420,12 @@ struct SourceListView: View {
     private func sourceRow(_ s: ComicSource) -> some View {
         let key = keyOf(s)
         let isSel = selected.contains(key)
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             // 名称 + 勾选框合并成一个控件
             Button { toggleSelect(key) } label: {
                 HStack(spacing: 8) {
                     Image(systemName: isSel ? "checkmark.square.fill" : "square")
-                        .font(.title3)
+                        .font(.system(size: 19))
                         .foregroundStyle(isSel ? Color.accentColor : Color.secondary)
                     sourceInfo(s)
                 }
@@ -432,16 +433,7 @@ struct SourceListView: View {
             }
             .buttonStyle(.plain)
 
-            // 「发现」状态图标（对齐 Legado 的 ivExplore：绿=启用、红=禁用、无栏目则隐藏）
-            if !(s.ruleFindUrl ?? "").isEmpty {
-                Button { toggleExplore(s) } label: {
-                    Image(systemName: "square.grid.2x2")
-                        .font(.caption)
-                        .foregroundStyle(s.isExploreEnabled ? Color.green : Color.red)
-                }
-                .buttonStyle(.plain)
-            }
-            // 红开关
+            // 红开关（缩到 0.78，给名字腾地方）
             Toggle("", isOn: Binding(get: { s.isEnabled },
                                      set: { v in
                                          ComicRepository.shared.setEnable(url: s.bookSourceUrl, enable: v)
@@ -450,12 +442,9 @@ struct SourceListView: View {
                 .labelsHidden()
                 .fixedSize()
                 .tint(.red)
-            // ✏️
-            Button { editingSource = s } label: {
-                Image(systemName: "square.and.pencil").foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            // ⋮
+                .scaleEffect(0.78)
+                .frame(width: 40)
+            // ⋮（编辑、置顶、发现开关都在里面）
             Menu {
                 Button { editingSource = s } label: { Label("编辑", systemImage: "square.and.pencil") }
                 Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
@@ -490,8 +479,16 @@ struct SourceListView: View {
                 }
                 healthBadge(s)
             }
-            Text(subtitle(s))
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 4) {
+                // 「发现」状态：绿=启用、红=禁用（原来是一个独立按钮，太占地方）
+                if !(s.ruleFindUrl ?? "").isEmpty {
+                    Circle()
+                        .fill(s.isExploreEnabled ? Color.green : Color.red)
+                        .frame(width: 5, height: 5)
+                }
+                Text(subtitle(s))
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -860,9 +857,15 @@ struct ImportSheet: View {
                 Task {
                     if let data = try? await item.loadTransferable(type: Data.self),
                        let img = UIImage(data: data), let code = QRDecoder.decode(img) {
-                        // 分片码要按顺序收齐，相册一次只能选一张 → 引导用相机扫
-                        if SourceQRCodec.decode(code) != nil {
-                            resultMsg = "这是多张一组的图源二维码，请用「相机扫码导入」按顺序扫完"
+                        // 图源码：单张就含全部数据，相册识图也能直接导入
+                        if SourceQRCodec.isSourceCode(code) {
+                            if let json = SourceQRCodec.decode(code) {
+                                let n = importText(json)
+                                resultMsg = n > 0 ? "✅ 从图片导入 \(n) 条图源" : "❌ 图源码解析不出图源"
+                                if n > 0 { onDone() }
+                            } else {
+                                resultMsg = "❌ 图源码解析失败"
+                            }
                             pickedPhoto = nil
                             return
                         }
