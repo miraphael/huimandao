@@ -88,7 +88,10 @@ final class AppSettings: ObservableObject {
     ///    换成 `@KeychainSetting` 后 `$webdavPass` 绑定照常可用（见包装器说明）。
     @KeychainSetting("webdavPass") var webdavPass: String
 
-    // 源核重探补丁包：存储远程包地址，进「重探补丁包」页面可一键更新
+    // 源核重探补丁包：存储远程包地址，进「重探补丁包」页面可一键更新。
+    // ⚠️ UI 入口已在 `SourceSettingsView` 隐藏（用户要求），但**代码保留**：
+    //    `Engine/ReprobePack.swift` / `UI/ReprobePackView.swift` 仍依赖这个字段，
+    //    删掉会编译不过。要恢复功能，把 SourceSettingsView 里注释掉的两段放回去即可。
     @AppStorage("reprobePackUrl") var reprobePackUrl = ""
 
     func loadThreadCounts() {

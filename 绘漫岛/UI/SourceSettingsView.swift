@@ -1,11 +1,9 @@
 import SwiftUI
 
-/// 设置子页 —— 图源（导入 / 管理 / 新建 / 重探补丁包）
+/// 设置子页 —— 图源（导入 / 管理 / 新建）
 ///
 /// 从原「设置」长 Form 拆出（ARCHITECTURE §8.6）。
-/// ⚠️ 所有 `@AppStorage` 键保持原样（重探补丁包地址走 `s.reprobePackUrl`），升级不丢设置。
 struct SourceSettingsView: View {
-    @EnvironmentObject var s: AppSettings
     @State private var showSourceImport = false
     @State private var showSourceEditor = false
     /// JS 源数量（导入/删除后刷新，作为入口行的角标）
@@ -57,30 +55,39 @@ struct SourceSettingsView: View {
                 } label: {
                     Label("新建图源", systemImage: "plus.square")
                 }
-                NavigationLink {
-                    ReprobePackView()
-                } label: {
-                    Label("导入重探补丁包", systemImage: "wand.and.stars")
-                }
+
+                // ── 已隐藏（用户要求：不删代码，只藏入口）──────────────────────────
+                // 「导入重探补丁包」+「源核重探（自动更新）」两个入口不再显示。
+                // 底层代码完整保留：Engine/ReprobePack.swift、UI/ReprobePackView.swift、
+                // AppSettings.reprobePackUrl。要恢复功能，把下面两段取消注释即可。
+                //
+                // NavigationLink {
+                //     ReprobePackView()
+                // } label: {
+                //     Label("导入重探补丁包", systemImage: "wand.and.stars")
+                // }
             } header: {
                 Text("图源管理")
             } footer: {
                 Text("导入支持：粘贴 JSON / 文件 / 相册二维码 / 链接下载。图源即规则，App 不提供任何内容。")
                     .font(.caption2)
             }
-            Section("源核重探（自动更新）") {
-                TextField("重探补丁包地址", text: $s.reprobePackUrl)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                NavigationLink {
-                    ReprobePackView()
-                } label: {
-                    Label("去应用 / 更新", systemImage: "wand.and.stars")
-                }
-                Text("填好源核重探产出的补丁包地址后，进「重探补丁包」页面会自动拉取并列出可更新的源（保留你的启用状态与发现页栏目）。")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
+
+            // ── 已隐藏（用户要求：不删代码，只藏入口）──────────────────────────
+            // 恢复时：① 取消注释；② 在本结构体顶部加回 `@EnvironmentObject var s: AppSettings`。
+            // Section("源核重探（自动更新）") {
+            //     TextField("重探补丁包地址", text: $s.reprobePackUrl)
+            //         .textInputAutocapitalization(.never)
+            //         .autocorrectionDisabled()
+            //         .keyboardType(.URL)
+            //     NavigationLink {
+            //         ReprobePackView()
+            //     } label: {
+            //         Label("去应用 / 更新", systemImage: "wand.and.stars")
+            //     }
+            //     Text("填好源核重探产出的补丁包地址后，进「重探补丁包」页面会自动拉取并列出可更新的源（保留你的启用状态与发现页栏目）。")
+            //         .font(.caption2).foregroundStyle(.secondary)
+            // }
         }
         .transparentScrollBackground()
         .navigationTitle("图源")
