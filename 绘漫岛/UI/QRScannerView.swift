@@ -125,16 +125,20 @@ struct QRScannerView: View {
         let now = Date()
         guard now.timeIntervalSince(lastDecode) > 0.8 else { return }
         lastDecode = now
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if SourceQRCodec.isSourceCode(t) {
+        // ⚠️ 图源码（base45）里「空格」是有效字符 —— 不能先 trim 空格再判断，
+        //    否则末尾空格被吃掉会导致整段解码失败。网址/普通文本才需要 trim。
+        if SourceQRCodec.isSourceCode(text) {
             // 单张图源码：直接解压还原，不用联网
-            if let json = SourceQRCodec.decode(t) {
+            if let json = SourceQRCodec.decode(text) {
                 finish(json)
             } else {
                 status = "❌ 图源码解析失败（可能被遮挡）"
             }
-        } else if t.lowercased().hasPrefix("http") {
+            return
+        }
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if t.lowercased().hasPrefix("http") {
             status = "识别到网址，正在下载…"
             Task {
                 let fetched = await HttpFetcher.shared.fetchText(t)
