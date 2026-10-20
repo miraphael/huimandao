@@ -14,6 +14,8 @@ struct SourceListView: View {
     @State private var importText = ""
     @State private var showImport = false
     @State private var showEditor = false
+    /// 图源导出成二维码（见 SourceQRExportView）
+    @State private var showQRExport = false
     @State private var editingSource: ComicSource?
     @State private var loginSource: ComicSource?
     /// 待删除的图源（等二次确认）—— 见侧滑「删除」处的说明
@@ -176,6 +178,7 @@ struct SourceListView: View {
                         Button { showImport = true } label: { Label("导入图源", systemImage: "square.and.arrow.down") }
                         Button { showEditor = true } label: { Label("新建图源", systemImage: "plus.square") }
                         Button { exportAll() } label: { Label("导出全部", systemImage: "square.and.arrow.up") }
+                        Button { showQRExport = true } label: { Label("导出为二维码…", systemImage: "qrcode") }
                         Button { exportEncrypted() } label: { Label("一键加密导出(S001)", systemImage: "lock") }
                         Divider()
                         Button { ComicRepository.shared.setAllSourcesEnabled(true); reload() } label: { Label("全部启用", systemImage: "checkmark.circle") }
@@ -194,6 +197,7 @@ struct SourceListView: View {
                 }
             }
             .sheet(isPresented: $showImport) { ImportSheet(onDone: reload) }
+            .sheet(isPresented: $showQRExport) { SourceQRExportView() }
             .sheet(isPresented: $showCheck) { NavigationStack { SourceCheckView() } }
             .sheet(item: $loginSource) { src in
                 NavigationStack { SourceLoginView(source: src) }
@@ -295,6 +299,7 @@ struct ImportSheet: View {
     @State private var fromWeb = ""
     @State private var showFilePicker = false
     @State private var pickedPhoto: PhotosPickerItem? = nil
+    @State private var showScanner = false
     @State private var resultMsg: String? = nil
 
     var body: some View {
@@ -309,6 +314,11 @@ struct ImportSheet: View {
                     } label: { Label("从文件导入（JSON/TXT）", systemImage: "doc") }
                     PhotosPicker(selection: $pickedPhoto, matching: .images) {
                         Label("从相册二维码导入", systemImage: "qrcode.viewfinder")
+                    }
+                    Button {
+                        showScanner = true
+                    } label: {
+                        Label("相机扫码导入", systemImage: "camera.viewfinder")
                     }
                 }
                 Section("或从 URL 导入") {
@@ -347,6 +357,9 @@ struct ImportSheet: View {
             .transparentScrollBackground()
             .navigationTitle("导入图源")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .sheet(isPresented: $showScanner) {
+                NavigationStack { QRScannerView() }
+            }
             .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.json, .text, .data]) { result in
                 if case .success(let url) = result {
                     let secured = url.startAccessingSecurityScopedResource()
@@ -365,6 +378,12 @@ struct ImportSheet: View {
                 Task {
                     if let data = try? await item.loadTransferable(type: Data.self),
                        let img = UIImage(data: data), let code = QRDecoder.decode(img) {
+                        // 分片码要按顺序收齐，相册一次只能选一张 → 引导用相机扫
+                        if SourceQRCodec.decode(code) != nil {
+                            resultMsg = "这是多张一组的图源二维码，请用「相机扫码导入」按顺序扫完"
+                            pickedPhoto = nil
+                            return
+                        }
                         resultMsg = "⏳ 已识别二维码，正在下载…"
                         let fetched = await HttpFetcher.shared.fetchText(code)
                         let trimmed = fetched.trimmingCharacters(in: .whitespacesAndNewlines)
