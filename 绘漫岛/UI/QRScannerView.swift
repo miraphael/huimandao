@@ -20,6 +20,8 @@ struct QRScannerView: View {
     @State private var parts: [SourceQRCodec.Part] = []
     @State private var status = "把二维码放进取景框"
     @State private var finished = false
+    /// 导入成功后的源名称（要在界面上显示，不能只闪一下）
+    @State private var importedNames: [String] = []
     /// 去抖：同一张码会连续回调几十次
     @State private var lastDecode = Date.distantPast
 
@@ -45,6 +47,34 @@ struct QRScannerView: View {
                 }
             }
 
+            // 导入成功的醒目提示（用户反馈：识别成功后要「在那里」也显示出来）
+            if finished, !importedNames.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 46))
+                        .foregroundStyle(.green)
+                    Text("导入成功")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(importedNames.prefix(8), id: \.self) { n in
+                            Label(n, systemImage: "square.stack.3d.up")
+                                .font(.callout)
+                                .lineLimit(1)
+                        }
+                        if importedNames.count > 8 {
+                            Text("…等共 \(importedNames.count) 条").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(20)
+                .frame(maxWidth: 300)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.15), lineWidth: 1))
+                .transition(.scale.combined(with: .opacity))
+                .animation(.spring(response: 0.32, dampingFraction: 0.8), value: finished)
+            }
+
             // 取景框 + 状态
             VStack {
                 Spacer()
@@ -68,7 +98,7 @@ struct QRScannerView: View {
         .onAppear { checkAuth() }
         .onChange(of: finished) { ok in
             guard ok else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { dismiss() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { dismiss() }
         }
     }
 
@@ -143,8 +173,10 @@ struct QRScannerView: View {
             status = "❌ 内容不是有效图源（\(json.count) 字符）"
             return
         }
+        importedNames = list.map { $0.bookSourceName.isEmpty ? "(未命名)" : $0.bookSourceName }
         status = "✅ 导入 \(list.count) 条图源"
         finished = true
+        DiagLog.event("qr", "import-ok", "\(list.count) 条：\(importedNames.joined(separator: "、"))")
         NotificationCenter.default.post(name: .hmdSourcesChanged, object: nil)
     }
 }

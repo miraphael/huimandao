@@ -258,98 +258,155 @@ struct SourceListView: View {
         reload()
     }
 
-    /// 多选模式的底部操作条
+    /// 多选模式的底部操作条 —— 样式对齐 Legado 截图：
+    /// `□ 全选（0/N）  反选  删除`（描边按钮，左对齐），导出二维码放在右侧。
     private var selectBar: some View {
-        HStack(spacing: 0) {
-            Button("全选") { selectAll() }
-                .font(.callout).padding(.horizontal, 12).padding(.vertical, 10)
-            Text("(\(selected.count)/\(selectableCount))")
-                .font(.caption).foregroundStyle(.secondary)
-            Button("反选") { invertSelection() }
-                .font(.callout).padding(.horizontal, 12).padding(.vertical, 10)
-            Spacer()
-            Button("二维码") { exportSelected() }
-                .font(.callout).padding(.horizontal, 10).padding(.vertical, 10)
+        HStack(spacing: 10) {
+            barButton("全选（\(selected.count)/\(selectableCount)）",
+                      systemImage: selectAllChecked ? "checkmark.square.fill" : "square",
+                      action: selectAll)
+                .disabled(selectableCount == 0)
+            barButton("反选", systemImage: "arrow.triangle.2.circlepath", action: invertSelection)
+                .disabled(selectableCount == 0)
+            barButton("删除", systemImage: "trash", destructive: true) { pendingMultiDelete = true }
                 .disabled(selected.isEmpty)
-            Button {
-                pendingMultiDelete = true
-            } label: {
-                Text("删除").font(.callout)
-            }
-            .font(.callout).padding(.horizontal, 12).padding(.vertical, 10)
-            .disabled(selected.isEmpty)
-            Button("完成") {
+            Spacer(minLength: 6)
+            barButton("二维码", systemImage: "qrcode", tint: .red) { exportSelected() }
+                .disabled(selected.isEmpty)
+            barButton("完成", systemImage: "checkmark") {
                 selecting = false
                 selected.removeAll()
             }
-            .font(.callout).fontWeight(.semibold)
-            .padding(.horizontal, 12).padding(.vertical, 10)
         }
-        .buttonStyle(.plain)
-        .tint(.primary)
+        .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.bar)
     }
 
-    /// 开源阅读样式的一行：勾选框 + 名称信息 + 右侧开关
+    /// 全选是否已满（勾满时图标变实心）
+    private var selectAllChecked: Bool {
+        !selected.isEmpty && selected.count >= selectableCount
+    }
+
+    /// 底部条的描边按钮（Legado 那种细线圆角框）
+    private func barButton(_ title: String, systemImage: String,
+                           destructive: Bool = false, tint: Color? = nil,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage).font(.caption)
+                Text(title).font(.callout)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .foregroundStyle(destructive ? Color.red : (tint ?? Color.primary))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke((destructive ? Color.red.opacity(0.45) : Color.primary.opacity(0.22)), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 开源阅读样式的一行（对齐 Legado 截图）：
+    /// 普通模式 = [名称信息] [红开关] [✏️编辑] [⋮菜单]
+    /// 选择模式 = [☑️勾选框] [名称信息]           ← 其余操作全隐藏，避免误触
     @ViewBuilder
     private func sourceRow(_ s: ComicSource) -> some View {
         let key = keyOf(s)
-        HStack(spacing: 10) {
-            if selecting {
-                Image(systemName: selected.contains(key) ? "checkmark.square.fill" : "square")
-                    .font(.title3)
-                    .foregroundStyle(selected.contains(key) ? Color.accentColor : Color.secondary)
-                    .onTapGesture { toggleSelect(key) }
-            }
-            Button {
-                if selecting { toggleSelect(key) } else { editingSource = s }
-            } label: {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(s.bookSourceName.isEmpty ? "(未命名)" : s.bookSourceName)
-                        Spacer(minLength: 0)
-                        // 预置健康清单角标：明确区分「站点没了」和「规则问题」
-                        // ⚠️ 健康数据比源规则还旧时**不显示结论**
-                        if SourceHealth.isStale(for: s) {
-                            Text("健康数据过期").font(.caption2).foregroundStyle(.secondary)
-                        } else if let h = SourceHealth.state(sourceUrl: s.bookSourceUrl), let b = h.badge {
-                            Text(b).font(.caption2)
-                                .foregroundStyle(h.badgeIsBad ? .red : (h.isGood ? .green : .orange))
-                        }
-                        if !s.isEnabled { Text("已停用").font(.caption2).foregroundStyle(.secondary) }
-                    }
-                    Text(s.bookSourceUrl).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    if let g = s.bookSourceGroup, !g.isEmpty {
-                        Text(g).font(.caption2).foregroundStyle(.tint).lineLimit(1)
-                    }
-                    if !s.caps.badges.isEmpty {
-                        Text(s.caps.badges.joined(separator: " · "))
-                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    }
+        if selecting {
+            // ── 选择模式：整行只做「勾选」─────────────────────────
+            Button { toggleSelect(key) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: selected.contains(key) ? "checkmark.square.fill" : "square")
+                        .font(.title2)
+                        .foregroundStyle(selected.contains(key) ? Color.accentColor : Color.secondary)
+                    rowContent(s)
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            // 开源阅读那枚开关：在这里直接停用/启用，不用侧滑
-            Toggle("", isOn: Binding(get: { s.isEnabled },
-                                     set: { v in
-                                         ComicRepository.shared.setEnable(url: s.bookSourceUrl, enable: v)
-                                         reload()
-                                     }))
-                .labelsHidden()
-                .fixedSize()
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { if selecting { toggleSelect(key) } }
-        .contextMenu {
-            Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
-            Button {
-                selecting = true
-                toggleSelect(key)
-            } label: { Label("选择", systemImage: "checkmark.circle") }
+        } else {
+            // ── 普通模式 ────────────────────────────────────────
+            HStack(spacing: 8) {
+                Button { editingSource = s } label: {
+                    rowContent(s)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                // 那枚红开关（Legado 里就是红的）
+                Toggle("", isOn: Binding(get: { s.isEnabled },
+                                         set: { v in
+                                             ComicRepository.shared.setEnable(url: s.bookSourceUrl, enable: v)
+                                             reload()
+                                         }))
+                    .labelsHidden()
+                    .fixedSize()
+                    .tint(.red)
+                // ✏️ 编辑
+                Button { editingSource = s } label: {
+                    Image(systemName: "square.and.pencil").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                // ⋮ 更多
+                Menu {
+                    Button { editingSource = s } label: { Label("编辑", systemImage: "square.and.pencil") }
+                    Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
+                    Button {
+                        selecting = true
+                        toggleSelect(key)
+                    } label: { Label("选择", systemImage: "checkmark.circle") }
+                    Divider()
+                    Button(role: .destructive) {
+                        pendingDelete = s
+                    } label: { Label("删除", systemImage: "trash") }
+                } label: {
+                    Image(systemName: "ellipsis").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            // 长按直接进入选择模式（Legado 的手感），省得去菜单里找
+            .onLongPressGesture(minimumDuration: 0.4, pressing: nil) {
+                    selecting = true
+                    selected.insert(key)
+            }
         }
     }
 
+    /// 行的文字内容（两种模式共用）：名称 + URL + 分组 + 健康角标 + 能力徽标
+    @ViewBuilder
+    private func rowContent(_ s: ComicSource) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(s.bookSourceName.isEmpty ? "(未命名)" : s.bookSourceName)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if SourceHealth.isStale(for: s) {
+                    Text("健康数据过期").font(.caption2).foregroundStyle(.secondary)
+                } else if let h = SourceHealth.state(sourceUrl: s.bookSourceUrl), let b = h.badge {
+                    Text(b).font(.caption2)
+                        .foregroundStyle(h.badgeIsBad ? .red : (h.isGood ? .green : .orange))
+                }
+                if !s.isEnabled { Text("已停用").font(.caption2).foregroundStyle(.secondary) }
+            }
+            // 域名 + 分组（Legado 把「书源分组」放在名称后面）
+            HStack(spacing: 4) {
+                Text(hostOf(s.bookSourceUrl)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                if let g = s.bookSourceGroup, !g.isEmpty {
+                    Text("· \(g)").font(.caption2).foregroundStyle(.tint).lineLimit(1)
+                }
+            }
+            if !s.caps.badges.isEmpty {
+                Text(s.caps.badges.joined(separator: " · "))
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+    }
+
+    /// 取域名（列表里显示域名比完整 URL 干净，和 Legado 一致）
+    private func hostOf(_ url: String) -> String {
+        URLComponents(string: url)?.host ?? url
+    }
 
     private var filtered: [ComicSource] {
         searchText.isEmpty ? sources : sources.filter { $0.bookSourceName.contains(searchText) || $0.bookSourceUrl.contains(searchText) }
