@@ -24,6 +24,12 @@ struct SourceListView: View {
     @State private var jsItems: [JSSourceStore.Item] = []
     @State private var jsEditing: JSSourceStore.Item?
     @State private var jsTesting: JSSourceStore.Item?
+    // ── 多选模式（开源阅读那套）─────────────────────────────────
+    // 长按任意一行 / 菜单「多选…」进入；底部出现 全选 / 反选 / 删除 / 二维码。
+    @State private var selecting = false
+    @State private var selected = Set<String>()     // "s:图源URL" 或 "j:JS源ID"
+    /// 点底部「二维码」时，把勾中的规则源交给导出页
+    @State private var exportList: [ComicSource] = []
 
     /// JS 类源的一行 —— 视觉上与规则源保持一致，右侧用 `{ }` 角标区分。
     @ViewBuilder
@@ -67,6 +73,8 @@ struct SourceListView: View {
     @State private var searchText = ""
     @State private var updating = false
     @State private var updateMsg = ""
+    /// 轻提示（多选相关操作反馈）
+    @State private var toast: String? = nil
 
     var body: some View {
         if embedded {
@@ -93,55 +101,11 @@ struct SourceListView: View {
                             jsRow(item)
                         }
                         ForEach(filtered) { s in
-                            NavigationLink {
-                                SourceEditorView(source: s) { reload() }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack(spacing: 6) {
-                                        Text(s.bookSourceName.isEmpty ? "(未命名)" : s.bookSourceName)
-                                        Spacer()
-                                        // 预置健康清单角标：明确区分「站点没了」和「规则问题」
-                                        // ⚠️ 健康数据比源规则还旧时**不显示结论** ——
-                                        //    否则用户会看到「站点不可达」，但那个结论是基于旧规则的。
-                                        if SourceHealth.isStale(for: s) {
-                                            Text("健康数据过期").font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                        } else if let h = SourceHealth.state(sourceUrl: s.bookSourceUrl),
-                                                  let b = h.badge {
-                                            Text(b).font(.caption2)
-                                                .foregroundStyle(h.badgeIsBad ? .red : (h.isGood ? .green : .orange))
-                                        }
-                                        if !s.isEnabled { Text("已停用").font(.caption2).foregroundStyle(.secondary) }
-                                    }
-                                    Text(s.bookSourceUrl).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                                    if let g = s.bookSourceGroup, !g.isEmpty {
-                                        Text(g).font(.caption2).foregroundStyle(.tint).lineLimit(1)
-                                    }
-                                    // 能力徽标：一眼看出这个源支持什么（搜索 / 发现 / 翻页 / JS）。
-                                    // 根治「点了没反应」—— 不支持的功能在列表里就能看出来，
-                                    // 而不是让用户点进去才发现。
-                                    if !s.caps.badges.isEmpty {
-                                        Text(s.caps.badges.joined(separator: " · "))
-                                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                }
-                            }
-                            .contextMenu {
-                                Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
-                            }
-                            .swipeActions {
-                                Button {
-                                    ComicRepository.shared.setEnable(url: s.bookSourceUrl, enable: !s.isEnabled)
-                                    reload()
-                                } label: { Label(s.isEnabled ? "停用" : "启用", systemImage: "power") }
-                                    .tint(.orange)
-                                Button(role: .destructive) {
-                                    // 🔴 删图源加二次确认 —— 删掉后该源下的书架/进度/下载
-                                    //    都会变成孤儿（不可恢复）。原来侧滑一下就直接删。
-                                    //    （由智能体「设置」发现）
-                                    pendingDelete = s
-                                } label: { Label("删除", systemImage: "trash") }
-                            }
+                            sourceRow(s)
+                        }
+                        // 多选模式的底部操作条（开源阅读那套：全选 / 反选 / 删除）
+                        .safeAreaInset(edge: .bottom) {
+                            if selecting { selectBar }
                         }
                     }
                     .transparentScrollBackground()
@@ -172,13 +136,27 @@ struct SourceListView: View {
             } message: {
                 Text("该源下的书架条目、阅读进度与已下载章节会变成孤儿数据，且不可恢复。")
             }
+            // 多选删除：一次删多个，同样要二次确认
+            .confirmationDialog("删除选中的 \(selected.count) 个图源？",
+                                isPresented: Binding(get: { pendingMultiDelete },
+                                                     set: { if !$0 { pendingMultiDelete = false } }),
+                                titleVisibility: .visible) {
+                Button("删除", role: .destructive) { deleteSelected() }
+                Button("取消", role: .cancel) { pendingMultiDelete = false }
+            } message: {
+                Text("这些源下的书架条目、阅读进度与已下载章节会变成孤儿数据，且不可恢复。")
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button { showImport = true } label: { Label("导入图源", systemImage: "square.and.arrow.down") }
+                        Button { selecting = true } label: { Label("多选…", systemImage: "checkmark.circle") }
                         Button { showEditor = true } label: { Label("新建图源", systemImage: "plus.square") }
                         Button { exportAll() } label: { Label("导出全部", systemImage: "square.and.arrow.up") }
-                        Button { showQRExport = true } label: { Label("导出为二维码…", systemImage: "qrcode") }
+                        Button {
+                            selecting = true
+                            toast = "勾选要导出的图源，然后点底部「二维码」"
+                        } label: { Label("导出为二维码…", systemImage: "qrcode") }
                         Button { exportEncrypted() } label: { Label("一键加密导出(S001)", systemImage: "lock") }
                         Divider()
                         Button { ComicRepository.shared.setAllSourcesEnabled(true); reload() } label: { Label("全部启用", systemImage: "checkmark.circle") }
@@ -197,7 +175,7 @@ struct SourceListView: View {
                 }
             }
             .sheet(isPresented: $showImport) { ImportSheet(onDone: reload) }
-            .sheet(isPresented: $showQRExport) { SourceQRExportView() }
+            .sheet(isPresented: $showQRExport) { SourceQRExportView(sources: exportList) }
             .sheet(isPresented: $showCheck) { NavigationStack { SourceCheckView() } }
             .sheet(item: $loginSource) { src in
                 NavigationStack { SourceLoginView(source: src) }
@@ -205,10 +183,173 @@ struct SourceListView: View {
             .sheet(isPresented: $showEditor) {
                 NavigationStack { SourceEditorView(source: nil) { reload() } }
             }
+            .sheet(item: $editingSource) { src in
+                NavigationStack { SourceEditorView(source: src) { reload() } }
+            }
             .onAppear { reload() }
             // 后台导入/修复图源时，边解边刷新（首次启动要几十秒）
             .onReceive(NotificationCenter.default.publisher(for: .hmdSourcesChanged)) { _ in reload() }
+            .overlay(alignment: .top) {
+                if let toast {
+                    Text(toast)
+                        .font(.callout)
+                        .padding(.horizontal, 16).padding(.vertical, 9)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.top, 8)
+                        .onAppear {
+                            let keep = toast
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+                                if self.toast == keep { self.toast = nil }
+                            }
+                        }
+                }
+            }
     }
+
+    // MARK: - 多选（开源阅读样式）
+
+    /// 规则源在 `selected` 里的键
+    private func keyOf(_ s: ComicSource) -> String { "s:" + s.bookSourceUrl }
+    private func keyOf(_ j: JSSourceStore.Item) -> String { "j:" + j.id }
+
+    /// 参与「全选/反选」的总数（规则源 + JS 源，与列表一致）
+    private var selectableCount: Int { filtered.count + jsItems.count }
+
+    private func toggleSelect(_ key: String) {
+        if selected.contains(key) { selected.remove(key) } else { selected.insert(key) }
+    }
+
+    private func selectAll() {
+        selected.removeAll()
+        filtered.forEach { selected.insert(keyOf($0)) }
+        jsItems.forEach { selected.insert(keyOf($0)) }
+    }
+
+    private func invertSelection() {
+        var s = Set<String>()
+        filtered.forEach { if !selected.contains(keyOf($0)) { s.insert(keyOf($0)) } }
+        jsItems.forEach { if !selected.contains(keyOf($0)) { s.insert(keyOf($0)) } }
+        selected = s
+    }
+
+    /// 底部「二维码」：把**勾中的规则源**交给导出页（JS 源不能导出成 Legado 图源，跳过）
+    private func exportSelected() {
+        let picked = filtered.filter { selected.contains(keyOf($0)) }
+        guard !picked.isEmpty else {
+            toast = "先勾选要导出的图源"
+            return
+        }
+        exportList = picked
+        selecting = false
+        showQRExport = true
+    }
+
+    /// 底部「删除」用的确认（支持一次删多个：规则源 + JS 源）
+    @State private var pendingMultiDelete = false
+
+    private func deleteSelected() {
+        let urls = filtered.filter { selected.contains(keyOf($0)) }.map(\.bookSourceUrl)
+        let jsIDs = jsItems.filter { selected.contains(keyOf($0)) }.map(\.id)
+        guard !urls.isEmpty || !jsIDs.isEmpty else { return }
+        if !urls.isEmpty { ComicRepository.shared.deleteSources(urls: urls) }
+        for id in jsIDs { JSSourceStore.remove(id: id) }
+        DiagLog.event("sources", "multidelete", "删除 \(urls.count) 个规则源 + \(jsIDs.count) 个 JS 源")
+        selected.removeAll()
+        reload()
+    }
+
+    /// 多选模式的底部操作条
+    private var selectBar: some View {
+        HStack(spacing: 0) {
+            Button("全选") { selectAll() }
+                .font(.callout).padding(.horizontal, 12).padding(.vertical, 10)
+            Text("(\(selected.count)/\(selectableCount))")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("反选") { invertSelection() }
+                .font(.callout).padding(.horizontal, 12).padding(.vertical, 10)
+            Spacer()
+            Button("二维码") { exportSelected() }
+                .font(.callout).padding(.horizontal, 10).padding(.vertical, 10)
+                .disabled(selected.isEmpty)
+            Button {
+                pendingMultiDelete = true
+            } label: {
+                Text("删除").font(.callout)
+            }
+            .font(.callout).padding(.horizontal, 12).padding(.vertical, 10)
+            .disabled(selected.isEmpty)
+            Button("完成") {
+                selecting = false
+                selected.removeAll()
+            }
+            .font(.callout).fontWeight(.semibold)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .tint(.primary)
+        .background(.bar)
+    }
+
+    /// 开源阅读样式的一行：勾选框 + 名称信息 + 右侧开关
+    @ViewBuilder
+    private func sourceRow(_ s: ComicSource) -> some View {
+        let key = keyOf(s)
+        HStack(spacing: 10) {
+            if selecting {
+                Image(systemName: selected.contains(key) ? "checkmark.square.fill" : "square")
+                    .font(.title3)
+                    .foregroundStyle(selected.contains(key) ? Color.accentColor : Color.secondary)
+                    .onTapGesture { toggleSelect(key) }
+            }
+            Button {
+                if selecting { toggleSelect(key) } else { editingSource = s }
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(s.bookSourceName.isEmpty ? "(未命名)" : s.bookSourceName)
+                        Spacer(minLength: 0)
+                        // 预置健康清单角标：明确区分「站点没了」和「规则问题」
+                        // ⚠️ 健康数据比源规则还旧时**不显示结论**
+                        if SourceHealth.isStale(for: s) {
+                            Text("健康数据过期").font(.caption2).foregroundStyle(.secondary)
+                        } else if let h = SourceHealth.state(sourceUrl: s.bookSourceUrl), let b = h.badge {
+                            Text(b).font(.caption2)
+                                .foregroundStyle(h.badgeIsBad ? .red : (h.isGood ? .green : .orange))
+                        }
+                        if !s.isEnabled { Text("已停用").font(.caption2).foregroundStyle(.secondary) }
+                    }
+                    Text(s.bookSourceUrl).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    if let g = s.bookSourceGroup, !g.isEmpty {
+                        Text(g).font(.caption2).foregroundStyle(.tint).lineLimit(1)
+                    }
+                    if !s.caps.badges.isEmpty {
+                        Text(s.caps.badges.joined(separator: " · "))
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            // 开源阅读那枚开关：在这里直接停用/启用，不用侧滑
+            Toggle("", isOn: Binding(get: { s.isEnabled },
+                                     set: { v in
+                                         ComicRepository.shared.setEnable(url: s.bookSourceUrl, enable: v)
+                                         reload()
+                                     }))
+                .labelsHidden()
+                .fixedSize()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if selecting { toggleSelect(key) } }
+        .contextMenu {
+            Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
+            Button {
+                selecting = true
+                toggleSelect(key)
+            } label: { Label("选择", systemImage: "checkmark.circle") }
+        }
+    }
+
 
     private var filtered: [ComicSource] {
         searchText.isEmpty ? sources : sources.filter { $0.bookSourceName.contains(searchText) || $0.bookSourceUrl.contains(searchText) }

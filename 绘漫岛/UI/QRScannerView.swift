@@ -5,8 +5,13 @@ import UIKit
 /// 相机扫码导入图源（放在「导入图源」页）。
 ///
 /// 能识别两种内容：
-///  1. `hmdqr|<i>/<n>|<base64>` —— App「导出二维码」生成的分片，按顺序扫齐后拼回 JSON 导入；
+///  1. `hmdqr|z|1/3|…` —— App「导出二维码」生成的分片，按顺序扫齐后拼回 JSON 导入；
 ///  2. 普通网址 —— 保持老逻辑，App 自己下载后导入（兼容以前的相册识图）。
+///
+/// 🔴 **黑屏教训（v117 实测）**：预览层绝不能在 `makeUIView` 里 `layer.frame = view.bounds`
+/// —— 那一刻视图还没布局，bounds 是 `.zero`，层就是 0×0，表现为**全黑**。
+/// 正确做法是自定义 UIView 并把 `layerClass` 设成 `AVCaptureVideoPreviewLayer`，
+/// 层会随视图自动改变尺寸。
 struct QRScannerView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -15,13 +20,13 @@ struct QRScannerView: View {
     @State private var parts: [SourceQRCodec.Part] = []
     @State private var status = "把二维码放进取景框"
     @State private var finished = false
-    /// 去抖：同一张码会被连续回调很多次
+    /// 去抖：同一张码会连续回调几十次
     @State private var lastDecode = Date.distantPast
 
     var body: some View {
         ZStack {
             if authorized {
-                ScannerPreview { text in handle(text) }
+                CameraPreview(onDecode: handle)
                     .ignoresSafeArea()
             } else {
                 VStack(spacing: 14) {
@@ -46,7 +51,6 @@ struct QRScannerView: View {
                 RoundedRectangle(cornerRadius: 16)
                     .stroke(Color.white.opacity(0.9), lineWidth: 2)
                     .frame(width: 250, height: 250)
-                    .background(Color.clear)
                 Spacer().frame(height: 18)
                 Text(status)
                     .font(.callout).fontWeight(.medium)
@@ -145,60 +149,59 @@ struct QRScannerView: View {
     }
 }
 
-/// 相机预览 + 二维码识别（AVFoundation 最少实现）
-private struct ScannerPreview: UIViewRepresentable {
-    let onDetect: (String) -> Void
+/// 相机预览：把视图自己的 layer 当预览层（`layerClass`），尺寸自动跟随 —— 不会黑屏。
+private struct CameraPreview: UIViewRepresentable {
+    let onDecode: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onDetect: onDetect) }
+    func makeCoordinator() -> Coordinator { Coordinator(onDecode: onDecode) }
 
     func makeUIView(context: Context) -> UIView {
-        let v = UIView(frame: .zero)
+        let v = PreviewUIView(frame: .zero)
         v.backgroundColor = .black
-        let session = AVCaptureSession()
-        session.sessionPreset = .high
+        v.onDecode = onDecode
+
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device),
-              session.canAddInput(input) else {
+              v.session.canAddInput(input) else {
             DiagLog.event("qr", "camera", "❌ 拿不到摄像头输入")
             return v
         }
-        session.addInput(input)
+        v.session.addInput(input)
 
         let output = AVCaptureMetadataOutput()
-        guard session.canAddOutput(output) else {
+        guard v.session.canAddOutput(output) else {
             DiagLog.event("qr", "camera", "❌ 加不了输出")
             return v
         }
-        session.addOutput(output)
+        v.session.addOutput(output)
         output.setMetadataObjectsDelegate(context.coordinator, queue: DispatchQueue.main)
         output.metadataObjectTypes = [.qr]
 
-        let layer = AVCaptureVideoPreviewLayer(session: session)
-        layer.videoGravity = .resizeAspectFill
-        layer.frame = v.bounds
-        v.layer.addSublayer(layer)
+        let layer = v.layer as? AVCaptureVideoPreviewLayer
+        layer?.session = v.session
+        layer?.videoGravity = .resizeAspectFill
 
-        context.coordinator.previewLayer = layer
-        context.coordinator.session = session
-        DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
+        DispatchQueue.global(qos: .userInitiated).async { v.session.startRunning() }
         return v
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        // 旋转 / 尺寸变化时保持铺满
-        context.coordinator.previewLayer?.frame = uiView.bounds
-    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
 
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-        coordinator.stop()
+        (uiView as? PreviewUIView)?.session.stopRunning()
+    }
+
+    /// 预览层随视图尺寸自动变化，`makeUIView` 时不必（也不能）手动设 frame
+    final class PreviewUIView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        let session = AVCaptureSession()
+        var onDecode: ((String) -> Void)?
     }
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
-        let onDetect: (String) -> Void
-        var previewLayer: AVCaptureVideoPreviewLayer?
-        var session: AVCaptureSession?
+        let onDecode: (String) -> Void
 
-        init(onDetect: @escaping (String) -> Void) { self.onDetect = onDetect }
+        init(onDecode: @escaping (String) -> Void) { self.onDecode = onDecode }
 
         func metadataOutput(_ output: AVCaptureMetadataOutput,
                             didOutput metadataObjects: [AVMetadataObject],
@@ -206,11 +209,9 @@ private struct ScannerPreview: UIViewRepresentable {
             for obj in metadataObjects {
                 guard let code = obj as? AVMetadataMachineReadableCodeObject,
                       code.type == .qr, let s = code.stringValue, !s.isEmpty else { continue }
-                onDetect(s)
+                onDecode(s)
                 return
             }
         }
-
-        func stop() { session?.stopRunning() }
     }
 }

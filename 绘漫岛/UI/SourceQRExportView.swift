@@ -1,20 +1,27 @@
 import SwiftUI
 import UIKit
 
-/// 图源 → 二维码（放在「图源管理」页的菜单里）。
+/// 图源 → 二维码（放在「图源管理」页：多选后点底部「二维码」）。
 ///
 /// 一份图源 JSON 往往有几十 KB，一个二维码装不下，所以会生成**多张码**，
 /// 用 TabView 左右翻，对方按顺序扫完即可还原（见 `SourceQRCodec`）。
+///
+/// **压缩后 1 个源 ≈ 1 张码**（实测：单源 3336 字节 → zlib 1437 → base64 1916，
+/// 一个二维码 L 纠错能装约 2200 字符）。选得越多张数越多。
 struct SourceQRExportView: View {
     @Environment(\.dismiss) private var dismiss
-    /// 导出范围：只导启用的（常用，且码更少）/ 全部
-    @State private var enabledOnly = true
+    /// 要导出的源；空数组表示「导出全部已启用的」
+    let sources: [ComicSource]
+
+    /// 纠错等级：`L` 容量大、码更密；`M` 码更稀、更容易扫，但张数更多
+    @State private var dense = true
     @State private var codes: [String] = []
     @State private var total: Int = 0
-    /// codes 为空时的错误提示（弹窗）
     @State private var failMsg: String? = nil
-    /// 操作反馈（底部横幅）
     @State private var toast: String? = nil
+
+    private var chunk: Int { dense ? SourceQRCodec.chunkLength : SourceQRCodec.chunkLengthM }
+    private var correction: String { dense ? "L" : "M" }
 
     var body: some View {
         NavigationStack {
@@ -29,7 +36,7 @@ struct SourceQRExportView: View {
                         TabView {
                             ForEach(Array(codes.enumerated()), id: \.offset) { i, code in
                                 VStack(spacing: 10) {
-                                    if let img = SourceQRCodec.image(code) {
+                                    if let img = SourceQRCodec.image(code, correction: correction) {
                                         Image(uiImage: img)
                                             .interpolation(.none)
                                             .resizable()
@@ -50,7 +57,7 @@ struct SourceQRExportView: View {
                         VStack(spacing: 8) {
                             Text("对方打开：App → 图源 → 导入图源 → 相机扫码，按顺序扫完这 \(codes.count) 张")
                                 .font(.caption)
-                            Text("共 \(total) 个图源 · 已用压缩 JSON（越少越好）")
+                            Text("\(total) 个图源 · \(dense ? "高密度(张数少)" : "低密度(更好扫)")")
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 10)
@@ -65,9 +72,8 @@ struct SourceQRExportView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Picker("范围", selection: $enabledOnly) {
-                            Text("只导已启用的").tag(true)
-                            Text("导出全部").tag(false)
+                        Toggle(isOn: $dense) {
+                            Label(dense ? "高密度（张数少）" : "低密度（更好扫）", systemImage: "dial.low")
                         }
                         Divider()
                         Button {
@@ -96,29 +102,31 @@ struct SourceQRExportView: View {
                 }
             }
             .onAppear { rebuild() }
-            .onChange(of: enabledOnly) { _ in rebuild() }
+            .onChange(of: dense) { _ in rebuild() }
         }
     }
 
     private func rebuild() {
-        let list = ComicRepository.shared.allSources(includeDisabled: !enabledOnly)
+        let list = sources.isEmpty
+            ? ComicRepository.shared.allSources(includeDisabled: false)
+            : sources
         total = list.count
         guard total > 0 else {
             codes = []
-            failMsg = "当前范围下没有图源（\(enabledOnly ? "已启用" : "全部")）"
+            failMsg = "没有可导出的图源"
             return
         }
-        // 🔴 必须用 **pretty: false**：压缩后的 JSON 才可能少几张码。
-        //    pretty-printed 会白白多出 30%~50% 的空白字符。
+        // 🔴 必须 **pretty: false**：压缩后的 JSON 才可能少几张码。
         let json = SourceCodec.exportJson(list, pretty: false)
-        codes = SourceQRCodec.encode(json: json)
-        DiagLog.event("qr", "export", "生成 \(codes.count) 张二维码（\(total) 个源，\(json.count) 字符）")
+        codes = SourceQRCodec.encode(json: json, chunk: chunk)
+        DiagLog.event("qr", "export",
+                      "\(total) 个源 → \(codes.count) 张码（\(json.count) 字符 → 压缩后 \(dense ? "L" : "M") 级）")
     }
 
     private func saveAll() {
         var ok = 0
         for code in codes {
-            guard let img = SourceQRCodec.image(code) else { continue }
+            guard let img = SourceQRCodec.image(code, correction: correction) else { continue }
             UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
             ok += 1
         }
