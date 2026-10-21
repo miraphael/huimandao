@@ -17,6 +17,9 @@ struct HMDApp: App {
     /// 所以在主题页一拨，这里就会重算 `preferredColorScheme`。
     @AppStorage("theme.followSystem") private var followSystem = false
 
+    /// 从外部（微信 / QQ / 文件 App）用绘漫岛打开 JSON 后的结果提示。
+    @State private var importMsg: String?
+
     var body: some Scene {
         WindowGroup {
             // 🔴 主题背景必须放在 **ZStack 的最底层**，不能挂在 TabView 上用 `.background()`。
@@ -47,6 +50,24 @@ struct HMDApp: App {
                     .scrollContentBackgroundCompat()
                     .zIndex(1)
             }
+            .onOpenURL { url in
+                // 🔴 「微信/QQ/文件 App → 用绘漫岛打开 JSON」走的是这条链路，
+                //    不是 `fileImporter`。以前没接 → 用户点了没反应，
+                //    看起来就是「JSON 文件导入不进去」。
+                if url.isFileURL {
+                    SourceImporter.importFile(url)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .hmdImportResult)) { note in
+                importMsg = note.object as? String
+            }
+            .alert("图源导入",
+                   isPresented: Binding(get: { importMsg != nil },
+                                        set: { if !$0 { importMsg = nil } })) {
+                Button("好") { importMsg = nil }
+            } message: {
+                Text(importMsg ?? "")
+            }
             // ⚠️ **窗口层壁纸（ThemeWallpaper / WindowTransparency）已移除**（2026-10-14）
             //    原因：① 每 tab 各自铺背景已经能正常显示图，窗口层是多余的；
             //          ② 它会往 UIWindow 里插/删子视图，**在新建主题（弹 sheet）时卡死**
@@ -61,7 +82,7 @@ struct HMDApp: App {
                 let shortVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?"
                 let buildVer = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
                 DiagLog.event("app", "version",
-                              "构建指纹 build-131-hide-reprobe · App 版本 \(shortVer) (\(buildVer))")
+                              "构建指纹 build-132-import-fix · App 版本 \(shortVer) (\(buildVer))")
             }
         }
     }

@@ -36,5 +36,27 @@
 	<key>NSPhotoLibraryAddUsageDescription</key><string>保存漫画图片到相册</string>
 	<key>NSPhotoLibraryUsageDescription</key><string>选择本地图片</string>
 	<key>NSLocalNetworkUsageDescription</key><string>用于局域网分享图源与 Web 编辑器</string>
+	<!-- 注册文档类型：别人在微信/QQ/文件 App 里点「用绘漫岛打开」时，
+	     系统才会把 .json 交给本 App（否则根本不会出现在「打开方式」里，
+	     用户看到的就是「JSON 文件导入不进去」）。
+	     LSHandlerRank=Alternate：出现在可选列表，但不抢别人默认。 -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key><string>图源 JSON</string>
+			<key>CFBundleTypeRole</key><string>Viewer</string>
+			<key>LSHandlerRank</key><string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.json</string>
+				<string>public.plain-text</string>
+				<string>public.text</string>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
+	<!-- 允许在「文件」App 里直接看到 App 的 Documents（把 json 拖进去也行） -->
+	<key>UIFileSharingEnabled</key><true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
 </dict>
 </plist>

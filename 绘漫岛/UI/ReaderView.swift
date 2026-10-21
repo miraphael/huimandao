@@ -836,8 +836,19 @@ struct ReaderView: View {
     ///   `refresh` 会改，这一步必须由这里触发。）
     private func observeStore(_ st: ChapterImageStore) {
         storeObserver = st.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { _ in storeTick &+= 1 }
+            // ⚠️ 必须节流：预载会**连续**加载十几张，每张都发一次 objectWillChange。
+            //    原来直接 `storeTick += 1`，等于每加载一张就把整个阅读器 body 重算一次；
+            //    翻页模式下 `TabView` 被反复重建 → 用户看到的「翻页一闪一闪」。
+            //    120ms 合并一次，滚动模式照样能及时 refresh，翻页模式不再抖。
+            .throttle(for: .milliseconds(120), scheduler: RunLoop.main, latest: true)
+            .sink { _ in
+                // 只有**滚动模式**需要 storeTick 去驱动 `ZoomableStripView.refresh()`
+                // （重算每页高度 / contentSize）。
+                // 翻页 / 双页模式每页由 `StoreImage` 自己观察 store，
+                // 再让整个 ReaderView 重算只会把 TabView 反复重建 → 闪。
+                guard s.readMode == 1 else { return }
+                storeTick &+= 1
+            }
     }
 
     /// 诊断用：把**当前屏幕**截一张图存进 App 的 Documents。
@@ -1407,16 +1418,15 @@ struct StoreImage: View {
                 .frame(minHeight: placeholderHeight)
                 .onTapGesture { store.retry(index) }
             } else {
-                // 未加载页的占位：**带上页码**（2026-10-17）。
-                // 快滑时纯灰块会被读成「坏了 / 空的」，有页码至少知道是第几页在加载。
+                // 未加载页的占位：**只显示页码，不转圈**。
+                // 🔴 原来这里是 `ProgressView` + 页码 —— 翻页时图片若差一帧才到，
+                //    转圈会「出现→消失」，用户看到的就是「一闪一闪」。
+                //    纯色底 + 页码与阅读器底色一致，过渡完全无感。
                 ZStack {
-                    Color.white.opacity(0.10)
-                    VStack(spacing: 8) {
-                        ProgressView().tint(.white.opacity(0.75))
-                        Text("\(index + 1)")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.40))
-                    }
+                    Color.black
+                    Text("\(index + 1)")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.28))
                 }
                 .frame(minHeight: placeholderHeight)
                 .task { _ = await store.image(at: index) }

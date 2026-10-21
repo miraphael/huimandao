@@ -862,15 +862,12 @@ struct ImportSheet: View {
                     resultMsg = "❌ 没选到文件"
                     return
                 }
-                let secured = url.startAccessingSecurityScopedResource()
-                defer { if secured { url.stopAccessingSecurityScopedResource() } }
-
-                // 🔴 按**字节**读，不要只认 UTF-8 —— Windows 记事本存的 GBK、
-                //    某些工具存的 UTF-16 都会让 `String(contentsOf:encoding:.utf8)` 直接失败，
-                //    表现就是「文件读取失败」，而同一份文件在别人手机上能导入。
-                guard let data = try? Data(contentsOf: url) else {
+                // 🔴 用 `SourceImporter.read`（NSFileCoordinator）而不是裸 `Data(contentsOf:)`：
+                //    选到**尚未下载的 iCloud 文件**时，裸读会直接失败（「读不到文件」），
+                //    而协调读会先把文件拉下来 —— 这是「同一个人有时能导入有时不能」的常见原因。
+                guard let data = SourceImporter.read(url) else {
                     resultMsg = "❌ 读不到文件（iCloud 未下载 / 无权限）。可改用「粘贴 JSON」"
-                    DiagLog.event("import", "file", "Data(contentsOf:) 失败")
+                    DiagLog.event("import", "file", "读取失败")
                     return
                 }
                 guard let t = SourceCodec.text(from: data), !t.isEmpty else {
