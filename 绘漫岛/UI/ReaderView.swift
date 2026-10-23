@@ -642,11 +642,12 @@ struct ReaderView: View {
                 let w = geo.size.width
                 let actions = s.tapZones.split(separator: ",").map(String.init)
                 let zone = Int(location.x / (w / 3))
-                var action = zone >= 0 && zone < actions.count ? actions[zone] : "menu"
-                if s.readMode == 3 {   // 日漫：左右互换
-                    if action == "next" { action = "prev" }
-                    else if action == "prev" { action = "next" }
-                }
+                let action = zone >= 0 && zone < actions.count ? actions[zone] : "menu"
+                // 🔴 **不再按「日漫模式」自动左右互换**（2026-10-23 用户明确要求）。
+                //    点击分区必须严格等于 `tapZones` 的字面含义：
+                //      默认 "prev,menu,next" → 左=上一页、右=下一页。
+                //    以前在 `readMode == 3` 时把 next/prev 互换，导致用户设了
+                //    「右=下一页」却仍然点左边才翻页 —— 看起来像设置完全没生效。
                 switch action {
                 case "next": nextPage()
                 case "prev": prevPage()
@@ -785,11 +786,8 @@ struct ReaderView: View {
                 let w = geo.size.width
                 let actions = s.tapZones.split(separator: ",").map(String.init)
                 let zone = Int(location.x / (w / 3))
-                var action = zone >= 0 && zone < actions.count ? actions[zone] : "menu"
-                if isRTL {   // 日漫：左右互换
-                    if action == "next" { action = "prev" }
-                    else if action == "prev" { action = "next" }
-                }
+                let action = zone >= 0 && zone < actions.count ? actions[zone] : "menu"
+                // 🔴 同上：双页模式也不再按 isRTL 自动互换，点击分区照 `tapZones` 执行。
                 switch action {
                 case "next": nextSpread()
                 case "prev": prevSpread()
