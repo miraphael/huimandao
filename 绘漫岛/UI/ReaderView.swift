@@ -107,6 +107,18 @@ struct ReaderView: View {
         info.chapters.indices.contains(chapterIndex) ? info.chapters[chapterIndex] : nil
     }
 
+    /// 亮度偏移（约 -0.3 … +0.3）。`0.5` = 原样。
+    ///
+    /// 🔴 **必须用 `@AppStorage` 在视图里直接订阅**，不能读 `s.brightness`：
+    ///    `AppSettings` 是普通 class，里面的 `@AppStorage` **不会发
+    ///    `objectWillChange`**（和「主题切换没反应」是同一个坑）——
+    ///    所以拖亮度滑块时阅读器 body 根本不重算，用户看到的就是「亮度没反应」。
+    ///
+    /// ⚠️ 滤镜只作用在**漫画图**上，不要挂到根视图 —— 见 body 里那段说明
+    ///    （挂根视图会让 `TabView` 翻页时整屏黑一帧）。
+    @AppStorage("brightness") private var brightnessValue = 0.5
+    private var brightnessDelta: Double { Double(brightnessValue - 0.5) * 0.6 }
+
     var body: some View {
         Group {
             if loading {
@@ -137,7 +149,8 @@ struct ReaderView: View {
                 //    露出黑底，用户看到的就是「上下两条黑边，那里没有漫画」。
                 //    铺满整屏后黑边消失；顶部浮层仍然按安全区排（见 `readerChrome`），
                 //    所以返回按钮不会跑到刘海下面。
-                webtoonPager.ignoresSafeArea()
+                // 滚动模式是单个 UIScrollView，没有翻页过渡，滤镜可以安全地挂在外面。
+                webtoonPager.brightness(brightnessDelta).ignoresSafeArea()
             } else if s.readMode == 4 || s.readMode == 5 {
                 spreadPager.ignoresSafeArea()
             } else {
@@ -183,10 +196,17 @@ struct ReaderView: View {
             .sheet(isPresented: $showChapterList) { chapterListSheet }
         }
         .overlay { Color.black.opacity(s.eyeCare ? 0.25 : 0).allowsHitTesting(false) }
-        // 🔴 亮度方向以前是反的：`(1 - brightness) * 0.6` —— 滑块**越大画面越暗**，
-        //    而且默认 0.5 反而把整屏提亮 0.3，跟「亮度」语义正好相反。
-        //    现在按「0.5 = 原样、1 = 更亮、0 = 更暗」映射。（由智能体「设置」发现）
-        .brightness(Double(s.brightness - 0.5) * 0.6)
+        // 🔴 亮度**不再挂在根视图**上（2026-10-23 用户反馈「翻页每翻一页黑一下」）。
+        //
+        //    原因：`.brightness()` 是**色彩滤镜**，SwiftUI 会把它做成离屏合成层。
+        //    根视图里包着 `TabView(.page)`（底层 UIPageViewController），翻页时
+        //    整层滤镜要跟着重新合成 → 过渡的那一帧渲染不出来 → **整屏黑一下**。
+        //    每翻一页都黑一次，正是这个滤镜造成的。
+        //
+        //    现在改为**只作用在每张漫画图上**（见 `StoreImage(brightness:)`）：
+        //    滤镜跟着静态的 Image 层走，不参与翻页滚动，既不会黑帧，
+        //    亮度语义也仍然保留（0.5 = 原样，1 = 更亮，0 = 更暗）。
+        //    滚动模式单独在 `webtoonPager` 上应用（见 body 里的调用）。
         // 🔴 强制阅读器**子树**为深色（只作用子树，不动整个 window，所以进出阅读器不会闪）。
         //    不这么做的话，浅色主题下两处会「漏光」：
         //      ① 错误态 `EmptyState` 用 `.secondary/.tertiary`，在浅色方案下解析成深灰，
@@ -535,7 +555,8 @@ struct ReaderView: View {
                 if let store {
                     // 同上：整体缩放（翻页模式下也是「一屏一起放大」）
                     ForEach(0..<store.count, id: \.self) { i in
-                        StoreImage(store: store, index: i, fill: s.fillScreen)
+                        StoreImage(store: store, index: i, fill: s.fillScreen,
+                                   brightness: brightnessDelta)
                             .tag(i)
                     }
                 }
@@ -806,11 +827,11 @@ struct ReaderView: View {
         HStack(spacing: 0) {
             if isRTL {
                 // 右→左：序号大的在左，序号小的在右
-                if second < store.count { StoreImage(store: store, index: second, fill: s.fillScreen) }
-                StoreImage(store: store, index: first, fill: s.fillScreen)
+                if second < store.count { StoreImage(store: store, index: second, fill: s.fillScreen, brightness: brightnessDelta) }
+                StoreImage(store: store, index: first, fill: s.fillScreen, brightness: brightnessDelta)
             } else {
-                StoreImage(store: store, index: first, fill: s.fillScreen)
-                if second < store.count { StoreImage(store: store, index: second, fill: s.fillScreen) }
+                StoreImage(store: store, index: first, fill: s.fillScreen, brightness: brightnessDelta)
+                if second < store.count { StoreImage(store: store, index: second, fill: s.fillScreen, brightness: brightnessDelta) }
             }
         }
     }
@@ -1386,6 +1407,10 @@ struct StoreImage: View {
     @ObservedObject var store: ChapterImageStore
     let index: Int
     var fill = false
+    /// 亮度偏移（由阅读器设置传入）。0 = 原样。
+    /// ⚠️ 必须作用在**这张图**上，不能挂到外层 `TabView` —— 色彩滤镜包住翻页容器
+    ///    会导致每次翻页黑一帧（2026-10-23 用户反馈「每翻一页黑一下」）。
+    var brightness: Double = 0
 
     var body: some View {
         Group {
@@ -1401,10 +1426,12 @@ struct StoreImage: View {
                         .resizable()
                         .scaledToFill()
                         .clipped()
+                        .brightness(brightness)
                 } else {
                     Image(uiImage: img)
                         .resizable()
                         .scaledToFit()
+                        .brightness(brightness)
                 }
             } else if store.failed.contains(index) {
                 ZStack {
@@ -1429,7 +1456,12 @@ struct StoreImage: View {
                         .foregroundStyle(.white.opacity(0.28))
                 }
                 .frame(minHeight: placeholderHeight)
-                .task { _ = await store.image(at: index) }
+                .task {
+                    // 诊断：翻页若仍「黑一下」，看这行就知道是不是占位导致的
+                    // （预载正常时不该出现）。
+                    DiagLog.event("img", "placeholder", "页 \(index + 1) 未就绪，显示占位")
+                    _ = await store.image(at: index)
+                }
             }
         }
         .frame(maxWidth: .infinity)
