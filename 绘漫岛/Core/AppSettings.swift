@@ -86,6 +86,10 @@ final class AppSettings: ObservableObject {
     @AppStorage("doubleTapZoom") var doubleTapZoom = true
     @AppStorage("tapZones") var tapZones = "prev,menu,next"   // 三分区动作（右=下一页）
 
+    /// 翻页效果：0 = 滑动（ScrollView 分页），1 = 纸质（UIPageViewController 原生卷页）。
+    /// 默认纸质 —— 用户 2026-10-23 明确要求「像纸质书那样翻」。
+    @AppStorage("pageTurnStyle") var pageTurnStyle = 1
+
     // 并发
     @AppStorage("searchThreads") var searchThreads = 32
     @AppStorage("downloadThreads") var downloadThreads = 2

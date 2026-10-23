@@ -118,6 +118,17 @@ struct ReaderView: View {
     ///    （挂根视图会让 `TabView` 翻页时整屏黑一帧）。
     @AppStorage("brightness") private var brightnessValue = 0.5
     private var brightnessDelta: Double { Double(brightnessValue - 0.5) * 0.6 }
+    /// 变暗蒙层的浓度（0…0.65）。滚动模式与 `StoreImage` 共用同一套映射。
+    private var dimOpacity: Double {
+        brightnessDelta < 0 ? min(0.65, -brightnessDelta * 1.7) : 0
+    }
+    /// 提亮蒙层的浓度（0…0.22）。
+    private var brightOpacity: Double {
+        brightnessDelta > 0 ? min(0.22, brightnessDelta * 0.7) : 0
+    }
+    /// 给 UIKit 页面用的蒙层颜色（纸质翻页模式）
+    private var dimColor: UIColor { UIColor.black.withAlphaComponent(dimOpacity) }
+    private var brightColor: UIColor { UIColor.white.withAlphaComponent(brightOpacity) }
 
     var body: some View {
         Group {
@@ -149,8 +160,16 @@ struct ReaderView: View {
                 //    露出黑底，用户看到的就是「上下两条黑边，那里没有漫画」。
                 //    铺满整屏后黑边消失；顶部浮层仍然按安全区排（见 `readerChrome`），
                 //    所以返回按钮不会跑到刘海下面。
-                // 滚动模式是单个 UIScrollView，没有翻页过渡，滤镜可以安全地挂在外面。
-                webtoonPager.brightness(brightnessDelta).ignoresSafeArea()
+                // 滚动模式：**不要用 `.brightness()`**。
+                // 🔴 2026-10-23 用户反馈「滚动模式有一层模糊的黑幕」——
+                //    `.brightness()` 是色彩滤镜，作用在 `UIViewRepresentable`
+                //    （整条 UIScrollView）上会强制**离屏渲染**：画面发虚、发暗，
+                //    看起来就是「一层模糊的黑幕」。
+                //    改用普通半透明蒙层：清晰、无滤镜、无额外合成。
+                webtoonPager
+                    .overlay(Color.black.opacity(dimOpacity).allowsHitTesting(false))
+                    .overlay(Color.white.opacity(brightOpacity).allowsHitTesting(false))
+                    .ignoresSafeArea()
             } else if s.readMode == 4 || s.readMode == 5 {
                 spreadPager.ignoresSafeArea()
             } else {
@@ -562,7 +581,15 @@ struct ReaderView: View {
             //
             //    iOS 16 没有 `scrollTargetBehavior(.paging)`，退回 TabView 保证可用。
             Group {
-                if #available(iOS 17.0, *) {
+                if s.pageTurnStyle == 1, let store {
+                    // 纸质翻页：系统原生 page curl
+                    CurlPager(store: store,
+                              page: $page,
+                              fill: s.fillScreen,
+                              dim: dimColor,
+                              bright: brightColor,
+                              scrollEnabled: flipScale <= 1.01)
+                } else if #available(iOS 17.0, *) {
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 0) {
                             if let store {
@@ -606,7 +633,9 @@ struct ReaderView: View {
                     let next = chapterIndex + 1
                     Task { await loadChapter(next) }
                 }
-                saveProgress()
+                // ⚠️ 用**去抖**保存：翻页时每页同步写一次 SQLCipher（两次 SQL）
+                //    会在主线程造成明显卡顿 —— 用户感觉「翻页不顺」。
+                scheduleProgressSave()
             }
             .contentShape(Rectangle())
             .onTapGesture { location in
@@ -747,7 +776,9 @@ struct ReaderView: View {
                     let next = chapterIndex + 1
                     Task { await loadChapter(next) }
                 }
-                saveProgress()
+                // ⚠️ 用**去抖**保存：翻页时每页同步写一次 SQLCipher（两次 SQL）
+                //    会在主线程造成明显卡顿 —— 用户感觉「翻页不顺」。
+                scheduleProgressSave()
             }
             .contentShape(Rectangle())
             .onTapGesture { location in
@@ -1070,6 +1101,13 @@ struct ReaderView: View {
                         Label("铺满屏幕", systemImage: "rectangle.arrowtriangle.2.outward")
                     }
                     Text("开启（默认）：按屏幕铺满、裁掉溢出的边缘，画面没有黑边。关闭：整页完整显示，会留黑边。仅影响翻页 / 双页模式。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Picker("翻页效果", selection: $s.pageTurnStyle) {
+                        Text("滑动").tag(0)
+                        Text("纸质").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("纸质 = 系统原生卷页（带纸张阴影），像翻实体书；滑动 = 左右平移。仅影响翻页 / 日漫模式。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Section("屏幕") {
@@ -1622,6 +1660,165 @@ private struct FlipZoomModifier: ViewModifier {
                 .offset(offset)
         } else {
             content
+        }
+    }
+}
+
+// MARK: - 纸质翻页（真正的 page curl）
+
+/// 用 `UIPageViewController` 的 **`.pageCurl`** 过渡实现「纸质翻页」。
+///
+/// 为什么单独写一个：SwiftUI 的 `TabView(.page)` 只有平移，没有卷页；
+/// 而 `UIPageViewController(.pageCurl)` 是系统原生的**真卷页**（带纸张阴影）。
+///
+/// ⚠️ 三个必须处理的点：
+///   ① 系统自带的「点边缘翻页」手势要**关掉** —— 否则会和我们的 `tapZones` 抢；
+///   ② 缩放（`flipScale > 1`）时要**禁用翻页手势**，否则单指拖动会同时平移和翻页；
+///   ③ 页面里的图片由 `ChapterImageStore` 提供，store 更新时要刷新当前页。
+struct CurlPager: UIViewControllerRepresentable {
+    @ObservedObject var store: ChapterImageStore
+    @Binding var page: Int
+    var fill: Bool = true
+    var dim: UIColor = .clear
+    var bright: UIColor = .clear
+    var scrollEnabled: Bool = true
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIViewController(context: Context) -> UIPageViewController {
+        let pager = UIPageViewController(transitionStyle: .pageCurl,
+                                         navigationOrientation: .horizontal,
+                                         options: nil)
+        pager.dataSource = context.coordinator
+        pager.delegate = context.coordinator
+        pager.view.backgroundColor = .black
+        // ① 关掉系统「点边缘翻页」，交给我们的 tapZones
+        for gr in pager.gestureRecognizers where gr is UITapGestureRecognizer {
+            gr.isEnabled = false
+        }
+        context.coordinator.currentIndex = page
+        pager.setViewControllers([context.coordinator.pageVC(for: page)],
+                                 direction: .forward, animated: false)
+        return pager
+    }
+
+    func updateUIView(_ pager: UIPageViewController, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.refreshCurrent()
+
+        // ② 缩放时禁用翻页手势（只关 pan，保留我们自己的 tap）
+        for gr in pager.gestureRecognizers where !(gr is UITapGestureRecognizer) {
+            gr.isEnabled = scrollEnabled
+        }
+
+        if page != context.coordinator.currentIndex {
+            let forward = page > context.coordinator.currentIndex
+            context.coordinator.currentIndex = page
+            pager.setViewControllers([context.coordinator.pageVC(for: page)],
+                                     direction: forward ? .forward : .reverse,
+                                     animated: true)
+        }
+    }
+
+    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+        var parent: CurlPager
+        var currentIndex = 0
+        private var cache: [Int: PageVC] = [:]
+
+        init(_ parent: CurlPager) { self.parent = parent }
+
+        func pageVC(for index: Int) -> PageVC {
+            let vc: PageVC
+            if let hit = cache[index] {
+                vc = hit
+            } else {
+                vc = PageVC()
+                cache[index] = vc
+            }
+            vc.index = index
+            vc.fill = parent.fill
+            vc.dimColor = parent.dim
+            vc.brightColor = parent.bright
+            vc.applyStyle()
+            if let img = parent.store.current(index) {
+                vc.setImage(img)
+            } else {
+                vc.setImage(nil)
+                Task { [weak self] in _ = await self?.parent.store.image(at: index) }
+            }
+            return vc
+        }
+
+        func refreshCurrent() {
+            guard let vc = cache[currentIndex] else { return }
+            vc.fill = parent.fill
+            vc.dimColor = parent.dim
+            vc.brightColor = parent.bright
+            vc.applyStyle()
+            if let img = parent.store.current(currentIndex) {
+                vc.setImage(img)
+            }
+        }
+
+        func pageViewController(_ pvc: UIPageViewController,
+                                viewControllerBefore vc: UIViewController) -> UIViewController? {
+            guard let v = vc as? PageVC, v.index > 0 else { return nil }
+            return pageVC(for: v.index - 1)
+        }
+
+        func pageViewController(_ pvc: UIPageViewController,
+                                viewControllerAfter vc: UIViewController) -> UIViewController? {
+            guard let v = vc as? PageVC, v.index + 1 < parent.store.count else { return nil }
+            return pageVC(for: v.index + 1)
+        }
+
+        func pageViewController(_ pvc: UIPageViewController,
+                                didFinishAnimating finished: Bool,
+                                previousViewControllers: [UIViewController],
+                                transitionCompleted completed: Bool) {
+            guard completed, let v = pvc.viewControllers?.first as? PageVC else { return }
+            currentIndex = v.index
+            parent.page = v.index      // 写回 SwiftUI（Binding）
+        }
+    }
+
+    /// 一页：黑底 + 图片 + 亮度蒙层 + 点击分区
+    final class PageVC: UIViewController {
+        var index = 0
+        var fill = true
+        var dimColor: UIColor = .clear
+        var brightColor: UIColor = .clear
+
+        private let imageView = UIImageView()
+        private let dimView = UIView()
+        private let brightView = UIView()
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.backgroundColor = .black
+            imageView.frame = view.bounds
+            imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            imageView.clipsToBounds = true
+            view.addSubview(imageView)
+
+            dimView.isUserInteractionEnabled = false
+            dimView.frame = view.bounds
+            dimView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(dimView)
+
+            brightView.isUserInteractionEnabled = false
+            brightView.frame = view.bounds
+            brightView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(brightView)
+
+        }
+
+        func setImage(_ img: UIImage?) { imageView.image = img }
+
+        func applyStyle() {
+            imageView.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
+            dimView.backgroundColor = dimColor
+            brightView.backgroundColor = brightColor
         }
     }
 }
