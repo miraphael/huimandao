@@ -9,6 +9,24 @@ final class AppSettings: ObservableObject {
         Self.migrateWebDAVPasswordToKeychain()
         Self.migrateTapZonesToRightNext()
         Self.migrateReaderNoDarkVeil()
+        Self.migratePageScaleMode()
+    }
+
+    /// 迁移：旧的 Bool `fillScreen` → 新的三档 `pageScaleMode`。
+    ///
+    /// 用户反馈「关掉铺满后每页都留黑边，不像滚动模式」，所以 `false` 映射到
+    /// **适应宽度(0)**（而不是「完整」），默认也是 0。
+    private static func migratePageScaleMode() {
+        let flag = "pageScaleMode.v1"
+        let ud = UserDefaults.standard
+        guard !ud.bool(forKey: flag) else { return }
+        ud.set(true, forKey: flag)
+        if ud.object(forKey: "fillScreen") != nil {
+            let fill = ud.bool(forKey: "fillScreen")
+            ud.set(fill ? 1 : 0, forKey: "pageScaleMode")
+            DiagLog.event("reader", "scale",
+                          "页面缩放迁移：fillScreen=\(fill) → pageScaleMode=\(fill ? 1 : 0)")
+        }
     }
 
     /// 迁移：去掉阅读器那层「黑幕」（2026-10-23 用户明确要求）。
@@ -95,7 +113,16 @@ final class AppSettings: ObservableObject {
     ///   · `true`（默认）= **铺满屏幕**：按屏幕比例放大，裁掉溢出的边缘 —— 画面填满、无黑边
     ///   · `false`      = **整页完整**：整页缩进屏内，不裁切（上下/左右会留黑）
     /// 用户 2026-10-17 明确要「无论什么屏幕都填满」，所以默认取 `true`。
-    @AppStorage("fillScreen") var fillScreen = true
+    /// 页面缩放（仅翻页 / 双页模式）：
+    ///   0 = **适应宽度**（默认）—— 宽度铺满屏幕、高度按比例，超出屏幕的部分裁掉。
+    ///       和滚动模式的观感一致，不会左右留黑边。
+    ///   1 = 铺满 —— `scaledToFill`，裁掉溢出边缘，无黑边（宽图会裁得比较多）。
+    ///   2 = 完整 —— `scaledToFit`，整页显示，会留黑边。
+    ///
+    /// ⚠️ 旧版是 Bool `fillScreen`（true=铺满 / false=完整）。用户反馈
+    ///    「翻页模式每页大小不对、不如滚动模式贴合屏幕」，所以补了「适应宽度」这一档
+    ///    并作为默认；旧值在 `migratePageScaleMode()` 里换算。
+    @AppStorage("pageScaleMode") var pageScaleMode = 0
     @AppStorage("whiteEdgeCut") var whiteEdgeCut = true
     @AppStorage("keepScreenOn") var keepScreenOn = false
     @AppStorage("eyeCare") var eyeCare = false

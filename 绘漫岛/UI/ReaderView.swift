@@ -585,7 +585,7 @@ struct ReaderView: View {
                     // 纸质翻页：系统原生 page curl
                     CurlPager(store: store,
                               page: $page,
-                              fill: s.fillScreen,
+                              mode: s.pageScaleMode,
                               dim: dimColor,
                               bright: brightColor,
                               scrollEnabled: flipScale <= 1.01)
@@ -594,7 +594,7 @@ struct ReaderView: View {
                         LazyHStack(spacing: 0) {
                             if let store {
                                 ForEach(0..<store.count, id: \.self) { i in
-                                    StoreImage(store: store, index: i, fill: s.fillScreen,
+                                    StoreImage(store: store, index: i, mode: s.pageScaleMode,
                                                brightness: brightnessDelta)
                                         // 每页占满整屏（宽 + 高都要，否则高度会按图片比例收缩）
                                         .containerRelativeFrame([.horizontal, .vertical])
@@ -616,7 +616,7 @@ struct ReaderView: View {
                     TabView(selection: $page) {
                         if let store {
                             ForEach(0..<store.count, id: \.self) { i in
-                                StoreImage(store: store, index: i, fill: s.fillScreen,
+                                StoreImage(store: store, index: i, mode: s.pageScaleMode,
                                            brightness: brightnessDelta)
                                     .tag(i)
                             }
@@ -892,11 +892,11 @@ struct ReaderView: View {
         HStack(spacing: 0) {
             if isRTL {
                 // 右→左：序号大的在左，序号小的在右
-                if second < store.count { StoreImage(store: store, index: second, fill: s.fillScreen, brightness: brightnessDelta) }
-                StoreImage(store: store, index: first, fill: s.fillScreen, brightness: brightnessDelta)
+                if second < store.count { StoreImage(store: store, index: second, mode: s.pageScaleMode, brightness: brightnessDelta) }
+                StoreImage(store: store, index: first, mode: s.pageScaleMode, brightness: brightnessDelta)
             } else {
-                StoreImage(store: store, index: first, fill: s.fillScreen, brightness: brightnessDelta)
-                if second < store.count { StoreImage(store: store, index: second, fill: s.fillScreen, brightness: brightnessDelta) }
+                StoreImage(store: store, index: first, mode: s.pageScaleMode, brightness: brightnessDelta)
+                if second < store.count { StoreImage(store: store, index: second, mode: s.pageScaleMode, brightness: brightnessDelta) }
             }
         }
     }
@@ -1095,10 +1095,13 @@ struct ReaderView: View {
                     .pickerStyle(.segmented)
                     Text("双页 = 一屏两页（左→右）；双页日漫 = 右→左，适合日漫。")
                         .font(.caption2).foregroundStyle(.secondary)
-                    Toggle(isOn: $s.fillScreen) {
-                        Label("铺满屏幕", systemImage: "rectangle.arrowtriangle.2.outward")
+                    Picker("页面缩放", selection: $s.pageScaleMode) {
+                        Text("适应宽度").tag(0)
+                        Text("铺满").tag(1)
+                        Text("完整").tag(2)
                     }
-                    Text("开启（默认）：按屏幕铺满、裁掉溢出的边缘，画面没有黑边。关闭：整页完整显示，会留黑边。仅影响翻页 / 双页模式。")
+                    .pickerStyle(.segmented)
+                    Text("适应宽度（默认）：宽铺满屏幕、高按比例，超出屏幕的部分裁掉 —— 和滚动模式观感一致。铺满：裁掉边缘、无黑边。完整：整页显示、会留黑边。仅影响翻页 / 双页模式。")
                         .font(.caption2).foregroundStyle(.secondary)
                     Picker("翻页效果", selection: $s.pageTurnStyle) {
                         Text("滑动").tag(0)
@@ -1478,7 +1481,8 @@ struct ReaderView: View {
 struct StoreImage: View {
     @ObservedObject var store: ChapterImageStore
     let index: Int
-    var fill = false
+    /// 页面缩放：0 适应宽度 / 1 铺满 / 2 完整（见 `AppSettings.pageScaleMode`）
+    var mode = 0
     /// 亮度偏移（由阅读器设置传入）。0 = 原样。
     /// ⚠️ 必须作用在**这张图**上，不能挂到外层 `TabView` —— 色彩滤镜包住翻页容器
     ///    会导致每次翻页黑一帧（2026-10-23 用户反馈「每翻一页黑一下」）。
@@ -1489,22 +1493,7 @@ struct StoreImage: View {
             // ⚠️ 用 current(_:) 单点查询，不要读 `store.loaded` 整字典
             // （后者每次访问都加锁拷贝整个字典，一屏 10 个 cell 就是 10 次全量拷贝）
             if let img = store.current(index) {
-                // 🔴 `fill` 以前是**死参数**（声明了但没人用，永远走 scaledToFit）。
-                //    2026-10-17 补上，由「铺满屏幕」开关决定（默认开）：
-                //      · fillScreen = true  → scaledToFill：铺满屏幕，裁掉溢出部分（无黑边）
-                //      · fillScreen = false → scaledToFit：整页完整显示（会留黑边）
-                if fill {
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFill()
-                        .clipped()
-                        .overlay(tintOverlay)
-                } else {
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFit()
-                        .overlay(tintOverlay)
-                }
+                pageImage(img)
             } else if store.failed.contains(index) {
                 ZStack {
                     Color.gray.opacity(0.15)
@@ -1538,6 +1527,42 @@ struct StoreImage: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 按 `mode` 摆放这一页。
+    ///
+    /// 🔴 「适应宽度」是**默认**，也是用户要的「和滚动模式一样贴合屏幕」：
+    ///    宽度 = 屏幕宽度，高度按图片比例，**超出屏幕的部分裁掉**（顶部对齐）。
+    ///    滚动模式本来就是这么排的（宽铺满、高按比例往下滚），翻页模式照这个观感走，
+    ///    就不会出现「整页缩在中间、上下两条黑边」的割裂感。
+    @ViewBuilder
+    private func pageImage(_ img: UIImage) -> some View {
+        switch mode {
+        case 1:
+            // 铺满：裁掉溢出边缘，无黑边
+            Image(uiImage: img)
+                .resizable()
+                .scaledToFill()
+                .clipped()
+                .overlay(tintOverlay)
+        case 2:
+            // 完整：整页显示，留黑边
+            Image(uiImage: img)
+                .resizable()
+                .scaledToFit()
+                .overlay(tintOverlay)
+        default:
+            // 适应宽度（默认）：宽铺满、高按比例、顶部对齐、超出裁掉
+            GeometryReader { g in
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: g.size.width)
+                    .overlay(tintOverlay)
+                    .frame(width: g.size.width, height: g.size.height, alignment: .top)
+                    .clipped()
+            }
+        }
     }
 
     /// 亮度**用蒙层实现，不用 `.brightness()` 色彩滤镜**。
@@ -1676,7 +1701,7 @@ private struct FlipZoomModifier: ViewModifier {
 struct CurlPager: UIViewControllerRepresentable {
     @ObservedObject var store: ChapterImageStore
     @Binding var page: Int
-    var fill: Bool = true
+    var mode: Int = 0          // 0 适应宽度 / 1 铺满 / 2 完整
     var dim: UIColor = .clear
     var bright: UIColor = .clear
     var scrollEnabled: Bool = true
@@ -1734,7 +1759,7 @@ struct CurlPager: UIViewControllerRepresentable {
                 cache[index] = vc
             }
             vc.index = index
-            vc.fill = parent.fill
+            vc.mode = parent.mode
             vc.dimColor = parent.dim
             vc.brightColor = parent.bright
             vc.applyStyle()
@@ -1749,7 +1774,7 @@ struct CurlPager: UIViewControllerRepresentable {
 
         func refreshCurrent() {
             guard let vc = cache[currentIndex] else { return }
-            vc.fill = parent.fill
+            vc.mode = parent.mode
             vc.dimColor = parent.dim
             vc.brightColor = parent.bright
             vc.applyStyle()
@@ -1783,7 +1808,7 @@ struct CurlPager: UIViewControllerRepresentable {
     /// 一页：黑底 + 图片 + 亮度蒙层 + 点击分区
     final class PageVC: UIViewController {
         var index = 0
-        var fill = true
+        var mode = 0
         var dimColor: UIColor = .clear
         var brightColor: UIColor = .clear
 
@@ -1794,8 +1819,8 @@ struct CurlPager: UIViewControllerRepresentable {
         override func viewDidLoad() {
             super.viewDidLoad()
             view.backgroundColor = .black
+            view.clipsToBounds = true
             imageView.frame = view.bounds
-            imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             imageView.clipsToBounds = true
             view.addSubview(imageView)
 
@@ -1811,12 +1836,40 @@ struct CurlPager: UIViewControllerRepresentable {
 
         }
 
-        func setImage(_ img: UIImage?) { imageView.image = img }
+        func setImage(_ img: UIImage?) {
+            imageView.image = img
+            layoutImage()
+        }
 
         func applyStyle() {
-            imageView.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
             dimView.backgroundColor = dimColor
             brightView.backgroundColor = brightColor
+            layoutImage()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            layoutImage()
+        }
+
+        /// 三种缩放模式在 UIKit 侧的摆放（与 SwiftUI 的 `StoreImage.pageImage` 一致）
+        private func layoutImage() {
+            let b = view.bounds
+            guard b.width > 0, b.height > 0 else { return }
+            switch mode {
+            case 1:                                   // 铺满
+                imageView.contentMode = .scaleAspectFill
+                imageView.frame = b
+            case 2:                                   // 完整
+                imageView.contentMode = .scaleAspectFit
+                imageView.frame = b
+            default:                                  // 适应宽度
+                imageView.contentMode = .scaleAspectFit
+                let iw = imageView.image?.size.width ?? 1
+                let ih = imageView.image?.size.height ?? 1
+                let h = b.width * ih / max(iw, 1)
+                imageView.frame = CGRect(x: 0, y: 0, width: b.width, height: h)
+            }
         }
     }
 }
