@@ -63,6 +63,9 @@ struct ReaderView: View {
     /// 现在每页高度是**算出来的**，一次 `setContentOffset` 就能精确落位，
     /// 不再需要旧实现那套「重试 5~12 次直到图片撑开高度」的猜测式滚动。
     @State private var stripRestorePage: Int = -1
+    /// 按屏翻页：点左/右分区时请求滚动一屏（`seq` 变化即执行）
+    @State private var stripScrollSeq = 0
+    @State private var stripScrollDelta: CGFloat = 0
     /// `store` 状态变化的订阅 —— 图片加载完会学到**真实宽高比**，
     /// 而每页高度（宽 × 比例）是布局与内容总高的依据，必须据此重算。
     @State private var storeObserver: AnyCancellable?
@@ -166,7 +169,7 @@ struct ReaderView: View {
                 //    （整条 UIScrollView）上会强制**离屏渲染**：画面发虚、发暗，
                 //    看起来就是「一层模糊的黑幕」。
                 //    改用普通半透明蒙层：清晰、无滤镜、无额外合成。
-                webtoonPager
+                webtoonPager()
                     .overlay(Color.black.opacity(dimOpacity).allowsHitTesting(false))
                     .overlay(Color.white.opacity(brightOpacity).allowsHitTesting(false))
                     .ignoresSafeArea()
@@ -478,7 +481,8 @@ struct ReaderView: View {
     /// 每页高度由 `ZoomableStripView` 自己按「宽 × 宽高比」算（`StripMetrics`），
     /// 并且**内容视图直接观察 `store`** —— 图片加载完学到真实比例时，
     /// 只会重算各行 frame，**不会重建内容树**（重建会让画面闪一下）。
-    private var webtoonPager: some View {
+    private func webtoonPager(snap: Bool = false,
+                              onTapZone: ((Int) -> Void)? = nil) -> some View {
         Group {
             if let store {
                 ZoomableStripView(
@@ -489,6 +493,10 @@ struct ReaderView: View {
                     onPageChange: { reportVisiblePage($0) },
                     onZoomChanged: { z in zoomed = z },
                     onSingleTap: { toggleChrome() },
+                    pageSnap: snap,
+                    onTapZone: onTapZone,
+                    scrollSeq: stripScrollSeq,
+                    scrollBy: stripScrollDelta,
                     restorePage: stripRestorePage,
                     doubleTapZoomEnabled: s.doubleTapZoom,
                     onRestoreHandled: { stripRestorePage = -1 },
@@ -568,7 +576,49 @@ struct ReaderView: View {
     }
 
     // MARK: - 翻页模式（普通/日漫）
+    /// 翻页模式 —— 两种呈现：
+    ///   · 0 **按屏翻页**（默认）：连续长条 + 整屏吸附。图片接着往下排、一屏排满，
+    ///     滑一次正好一屏 —— **填满屏幕、没有黑边**，观感和滚动模式一致。
+    ///   · 1 **纸质卷页**：一页一张图（可能留黑边）。
+    @ViewBuilder
     private var flipPager: some View {
+        if s.pageTurnStyle == 0 {
+            webtoonPager(snap: true, onTapZone: { handleFlipTap(zone: $0) })
+        } else {
+            curlFlipPager
+        }
+    }
+
+    /// 点击分区（左/中/右）→ 上一页 / 菜单 / 下一页。
+    /// ⚠️ 严格按 `tapZones` 执行，**不再按日漫模式互换**（2026-10-23 用户要求）。
+    private func handleFlipTap(zone: Int) {
+        let actions = s.tapZones.split(separator: ",").map(String.init)
+        let action = zone >= 0 && zone < actions.count ? actions[zone] : "menu"
+        if s.pageTurnStyle == 0 {
+            // 按屏翻页：滚动整整一屏（内容连续，不存在「翻到半张图」）
+            switch action {
+            case "next": scrollStripByScreens(1)
+            case "prev": scrollStripByScreens(-1)
+            default: toggleChrome()
+            }
+        } else {
+            switch action {
+            case "next": nextPage()
+            case "prev": prevPage()
+            default: toggleChrome()
+            }
+        }
+    }
+
+    /// 请求滚动条按屏滚动（±1 屏）
+    private func scrollStripByScreens(_ n: CGFloat) {
+        let h = readerViewport.height > 1 ? readerViewport.height : UIScreen.main.bounds.height
+        stripScrollDelta = n * h
+        stripScrollSeq += 1
+    }
+
+    /// 纸质卷页那一套（一页一张图）
+    private var curlFlipPager: some View {
         GeometryReader { geo in
             // 🔴 翻页容器：iOS 17+ 用 **ScrollView + paging**，不再用 `TabView(.page)`。
             //
@@ -928,11 +978,12 @@ struct ReaderView: View {
             //    120ms 合并一次，滚动模式照样能及时 refresh，翻页模式不再抖。
             .throttle(for: .milliseconds(120), scheduler: RunLoop.main, latest: true)
             .sink { _ in
-                // 只有**滚动模式**需要 storeTick 去驱动 `ZoomableStripView.refresh()`
-                // （重算每页高度 / contentSize）。
-                // 翻页 / 双页模式每页由 `StoreImage` 自己观察 store，
-                // 再让整个 ReaderView 重算只会把 TabView 反复重建 → 闪。
-                guard s.readMode == 1 else { return }
+                // 只有**滚动长条**需要 storeTick 去驱动 `ZoomableStripView.refresh()`
+                // （重算每页高度 / contentSize）：
+                //   · 滚动模式（readMode == 1）
+                //   · **按屏翻页**（pageTurnStyle == 0，翻页模式也用长条渲染）
+                // 纸质卷页每页由 `CurlPager` 自己观察 store，不需要整页重算。
+                guard s.readMode == 1 || s.pageTurnStyle == 0 else { return }
                 storeTick &+= 1
             }
     }
@@ -1104,11 +1155,11 @@ struct ReaderView: View {
                     Text("适应宽度（默认）：宽铺满屏幕、高按比例，超出屏幕的部分裁掉 —— 和滚动模式观感一致。铺满：裁掉边缘、无黑边。完整：整页显示、会留黑边。仅影响翻页 / 双页模式。")
                         .font(.caption2).foregroundStyle(.secondary)
                     Picker("翻页效果", selection: $s.pageTurnStyle) {
-                        Text("滑动").tag(0)
-                        Text("纸质").tag(1)
+                        Text("按屏翻页").tag(0)
+                        Text("纸质卷页").tag(1)
                     }
                     .pickerStyle(.segmented)
-                    Text("纸质 = 系统原生卷页（带纸张阴影），像翻实体书；滑动 = 左右平移。仅影响翻页 / 日漫模式。")
+                    Text("按屏翻页（默认）：图片连续排布、滑一次正好一屏，**填满屏幕不留黑边**；纸质卷页：一页一张图 + 卷页动画，可能留黑边。仅影响翻页 / 日漫模式。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Section("屏幕") {

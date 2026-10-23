@@ -130,9 +130,11 @@ final class AppSettings: ObservableObject {
     @AppStorage("doubleTapZoom") var doubleTapZoom = true
     @AppStorage("tapZones") var tapZones = "prev,menu,next"   // 三分区动作（右=下一页）
 
-    /// 翻页效果：0 = 滑动（ScrollView 分页），1 = 纸质（UIPageViewController 原生卷页）。
-    /// 默认纸质 —— 用户 2026-10-23 明确要求「像纸质书那样翻」。
-    @AppStorage("pageTurnStyle") var pageTurnStyle = 1
+    /// 翻页效果：
+    ///   0 = **按屏翻页**（默认）—— 连续长条 + 整屏吸附。图片接着排、一屏排满，
+    ///       填满屏幕不留黑边，观感与滚动模式一致（用户 2026-10-23 选定）。
+    ///   1 = **纸质卷页** —— `UIPageViewController(.pageCurl)`，一页一张图，可能留黑边。
+    @AppStorage("pageTurnStyle") var pageTurnStyle = 0
 
     // 并发
     @AppStorage("searchThreads") var searchThreads = 32

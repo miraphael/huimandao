@@ -129,6 +129,13 @@ struct ZoomableStripView: UIViewRepresentable {
     let onZoomChanged: (Bool) -> Void
     /// 单击（呼出菜单）
     let onSingleTap: () -> Void
+    /// 翻页模式：**按屏幕高度吸附**（滑一次正好一屏）。滚动模式为 false。
+    var pageSnap: Bool = false
+    /// 翻页模式：单击分区（0 左 / 1 中 / 2 右）。滚动模式为 nil（只呼出菜单）。
+    var onTapZone: ((Int) -> Void)? = nil
+    /// 外部请求「滚动一屏」：`scrollSeq` 变化即执行一次，`scrollBy` 是位移（点）。
+    var scrollSeq: Int = 0
+    var scrollBy: CGFloat = 0
     /// 需要跳转到的页（-1 表示没有请求）
     let restorePage: Int
     /// 双击是否放大。
@@ -173,6 +180,7 @@ struct ZoomableStripView: UIViewRepresentable {
         host.view.backgroundColor = .clear
         context.coordinator.host = host
         sv.addSubview(host.view)
+        sv.decelerationRate = pageSnap ? .fast : .normal
 
         let dbl = UITapGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handleDoubleTap(_:)))
@@ -198,6 +206,12 @@ struct ZoomableStripView: UIViewRepresentable {
         // 同上：`storeTick` 只用来把「store 变了」翻译成一次 `updateUIView`。
         _ = storeTick
         context.coordinator.parent = self
+
+        // 按屏翻页：外部点了左/右分区 → 滚动一屏
+        if scrollSeq != context.coordinator.lastScrollSeq {
+            context.coordinator.lastScrollSeq = scrollSeq
+            context.coordinator.scrollBy(points: scrollBy, in: sv)
+        }
 
         // ── ① 续读落位：**必须在 `refresh` 之前** ─────────────────────────────
         // 🔴 顺序就是「打开漫画闪一下」的修复点：
@@ -239,6 +253,7 @@ struct ZoomableStripView: UIViewRepresentable {
         var parent: ZoomableStripView
         var host: UIHostingController<StripContentView>?
         weak var doubleTap: UITapGestureRecognizer?
+        var lastScrollSeq = 0
 
         /// 每页高度（与 `StripContentView` 用**同一个** `StripMetrics` 算出来）
         private var heights: [CGFloat] = []
@@ -791,6 +806,31 @@ struct ZoomableStripView: UIViewRepresentable {
             reportCurrentPage(sv)
         }
 
+        /// 按屏翻页：滚动指定距离（点），带边界钳制。缩放态下不响应。
+        func scrollBy(points: CGFloat, in sv: UIScrollView) {
+            guard abs(sv.zoomScale - 1) < 0.01, sv.bounds.height > 1 else { return }
+            let maxY = max(0, sv.contentSize.height - sv.bounds.height)
+            let target = max(0, min(sv.contentOffset.y + points, maxY))
+            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: target), animated: true)
+        }
+
+        /// 翻页模式：滑动结束**吸附到整屏边界**（滑一次 = 一屏）。
+        ///
+        /// 为什么用「吸附」而不是 `isPagingEnabled`：
+        /// `isPagingEnabled` 是按**视图尺寸**翻页，和内容无关；而这里是**连续长条**
+        /// （一屏可能含 1~3 张图、一张图也可能跨两屏），必须按屏幕高度吸附。
+        func scrollViewWillEndDragging(_ sv: UIScrollView,
+                                       withVelocity velocity: CGPoint,
+                                       targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+            guard parent.pageSnap, abs(sv.zoomScale - 1) < 0.01 else { return }
+            let h = sv.bounds.height
+            guard h > 1 else { return }
+            let maxY = max(0, sv.contentSize.height - h)
+            var target = (targetContentOffset.pointee.y / h).rounded() * h
+            target = max(0, min(target, maxY))
+            targetContentOffset.pointee = CGPoint(x: sv.contentOffset.x, y: target)
+        }
+
         /// 双击：以**双击点**为中心放大 / 还原 —— 与系统相册一致。
         /// ⚠️ 这个行为**由系统完成**：`zoom(to:)` 的参数就是「要显示的区域」，
         ///    `UIScrollView` 会自己算好 `contentOffset` 与 `zoomScale`，不需要手算锚点。
@@ -812,7 +852,14 @@ struct ZoomableStripView: UIViewRepresentable {
         }
 
         @objc func handleSingleTap(_ g: UITapGestureRecognizer) {
-            parent.onSingleTap()
+            // 翻页模式：按点击位置分三区（左/中/右）；滚动模式只呼出菜单
+            if let zone = parent.onTapZone, let sv = g.view as? UIScrollView {
+                let w = max(sv.bounds.width, 1)
+                let x = g.location(in: sv).x
+                zone(Int(max(0, min(2, x / (w / 3)))))
+            } else {
+                parent.onSingleTap()
+            }
         }
 
         /// 内容最底部那一行是「下一章」按钮，**单击手势要让位给 SwiftUI 的按钮**，
