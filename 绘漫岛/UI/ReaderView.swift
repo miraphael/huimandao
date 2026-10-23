@@ -551,20 +551,54 @@ struct ReaderView: View {
     // MARK: - 翻页模式（普通/日漫）
     private var flipPager: some View {
         GeometryReader { geo in
-            TabView(selection: $page) {
-                if let store {
-                    // 同上：整体缩放（翻页模式下也是「一屏一起放大」）
-                    ForEach(0..<store.count, id: \.self) { i in
-                        StoreImage(store: store, index: i, fill: s.fillScreen,
-                                   brightness: brightnessDelta)
-                            .tag(i)
+            // 🔴 翻页容器：iOS 17+ 用 **ScrollView + paging**，不再用 `TabView(.page)`。
+            //
+            //    为什么必须换（2026-10-23 用户第三次反馈「转场就是黑色」）：
+            //    `TabView(.page)` 底层是 `UIPageViewController`，它的转场在
+            //    `.ignoresSafeArea()` + 深色环境 + 全屏图片这套组合下会渲染出**黑帧**
+            //    （日志已排除占位：`[img] placeholder` 一条都没有，图片全都加载好了）。
+            //    普通 `ScrollView` 的页与页是**紧挨着**排布的，没有中间层、
+            //    没有转场容器，滑动就是纯位移，不会出现黑帧。
+            //
+            //    iOS 16 没有 `scrollTargetBehavior(.paging)`，退回 TabView 保证可用。
+            Group {
+                if #available(iOS 17.0, *) {
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 0) {
+                            if let store {
+                                ForEach(0..<store.count, id: \.self) { i in
+                                    StoreImage(store: store, index: i, fill: s.fillScreen,
+                                               brightness: brightnessDelta)
+                                        // 每页占满整屏（宽 + 高都要，否则高度会按图片比例收缩）
+                                        .containerRelativeFrame([.horizontal, .vertical])
+                                        .id(i)
+                                }
+                            }
+                        }
+                        .scrollTargetLayout()
                     }
+                    .scrollTargetBehavior(.paging)
+                    // `scrollPosition` 只认 `Binding<Int?>`，这里桥接一下
+                    .scrollPosition(id: Binding<Int?>(
+                        get: { page },
+                        set: { v in if let v { page = v } }
+                    ))
+                    .scrollIndicators(.hidden)
+                    .scrollDisabled(flipScale > 1.01)
+                } else {
+                    TabView(selection: $page) {
+                        if let store {
+                            ForEach(0..<store.count, id: \.self) { i in
+                                StoreImage(store: store, index: i, fill: s.fillScreen,
+                                           brightness: brightnessDelta)
+                                    .tag(i)
+                            }
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .scrollDisabled(flipScale > 1.01)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            // 放大时禁用 TabView 自己左右滑页 —— 否则单指拖动会同时平移图片和翻页。
-            // ⚠️ 这一条是「放大后拖动等于翻页」的根因修复（旧版只在滚动模式做了）。
-            .scrollDisabled(flipScale > 1.01)
             .onChange(of: page) { new in
                 // 预加载前后各2张；末页自动下一章
                 store?.preload(around: new)
