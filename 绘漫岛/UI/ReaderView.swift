@@ -595,8 +595,9 @@ struct ReaderView: View {
             //    `anchor: flipAnchor` 是「以双指中点为中心缩放」的关键：
             //    默认 `.center` 时无论手指捏在哪里，画面都绕屏幕中心缩放，
             //    用户感觉「放大后想看的地方跑掉了」。
-            .scaleEffect(flipScale, anchor: flipAnchor)
-            .offset(flipOffset)
+            // 🔴 只有真的缩放/平移过才套变换 —— 恒等变换也会生成离屏层，
+            //    包着 `TabView(.page)` 时翻页会黑一帧（见 `FlipZoomModifier`）。
+            .modifier(FlipZoomModifier(scale: flipScale, offset: flipOffset, anchor: flipAnchor))
             .simultaneousGesture(
                 MagnificationGesture()
                     .onChanged { v in
@@ -732,8 +733,9 @@ struct ReaderView: View {
             }
             // 缩放：与单页模式一致，整屏一起放大（包在 TabView 外层）。
             // 锚点 / 阻尼回弹 / 双击以点击点为中心 —— 与 flipPager 保持同一套手感。
-            .scaleEffect(flipScale, anchor: flipAnchor)
-            .offset(flipOffset)
+            // 🔴 只有真的缩放/平移过才套变换 —— 恒等变换也会生成离屏层，
+            //    包着 `TabView(.page)` 时翻页会黑一帧（见 `FlipZoomModifier`）。
+            .modifier(FlipZoomModifier(scale: flipScale, offset: flipOffset, anchor: flipAnchor))
             .simultaneousGesture(
                 MagnificationGesture()
                     .onChanged { v in
@@ -1426,12 +1428,12 @@ struct StoreImage: View {
                         .resizable()
                         .scaledToFill()
                         .clipped()
-                        .brightness(brightness)
+                        .overlay(tintOverlay)
                 } else {
                     Image(uiImage: img)
                         .resizable()
                         .scaledToFit()
-                        .brightness(brightness)
+                        .overlay(tintOverlay)
                 }
             } else if store.failed.contains(index) {
                 ZStack {
@@ -1450,7 +1452,8 @@ struct StoreImage: View {
                 //    转圈会「出现→消失」，用户看到的就是「一闪一闪」。
                 //    纯色底 + 页码与阅读器底色一致，过渡完全无感。
                 ZStack {
-                    Color.black
+                    // 近黑而不是纯黑：万一真的出现占位，也不会是一整块死黑。
+                    Color(white: 0.08)
                     Text("\(index + 1)")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.white.opacity(0.28))
@@ -1464,7 +1467,22 @@ struct StoreImage: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 亮度**用蒙层实现，不用 `.brightness()` 色彩滤镜**。
+    ///
+    /// 🔴 滤镜会在每张图上生成离屏合成层；`TabView(.page)` 翻页时整层重新合成
+    ///    → 黑一帧（2026-10-23 用户实锤「每翻一页黑一下」）。蒙层是普通半透明
+    ///    色块，没有滤镜，翻页零开销。
+    private var tintOverlay: Color {
+        if brightness < -0.001 {
+            return .black.opacity(min(0.65, -brightness * 1.7))   // 变暗
+        }
+        if brightness > 0.001 {
+            return .white.opacity(min(0.22, brightness * 0.7))    // 提亮
+        }
+        return .clear
     }
 
     /// 未加载页的**占位高度**。
@@ -1547,5 +1565,29 @@ extension UIApplication {
 extension ComicRepository {
     func execShelfReadMode(noteUrl: String, mode: Int) {
         Database.shared.exec("UPDATE COMIC_SHELF_BEAN SET READ_MODE=? WHERE NOTE_URL=?", mode, noteUrl)
+    }
+}
+
+/// 只在**真的缩放/平移过**时才套 `scaleEffect` + `offset`。
+///
+/// 🔴 为什么必须这么写（2026-10-23 用户反馈「每翻一页黑一下」）：
+///    即使 `scale == 1 && offset == .zero`，`.scaleEffect(1)` 也会让 SwiftUI
+///    生成一层**离屏 transform layer**。这层包在 `TabView(.page)`
+///    （底层 UIPageViewController）外面时，翻页过渡要重新合成整层 →
+///    过渡的那一帧渲染不出来 → **整屏黑一下**。
+///    恒等状态下**不加修饰符**，翻页就恢复原生平滑过渡。
+private struct FlipZoomModifier: ViewModifier {
+    let scale: CGFloat
+    let offset: CGSize
+    let anchor: UnitPoint
+
+    func body(content: Content) -> some View {
+        if scale > 1.0001 || offset != .zero {
+            content
+                .scaleEffect(scale, anchor: anchor)
+                .offset(offset)
+        } else {
+            content
+        }
     }
 }

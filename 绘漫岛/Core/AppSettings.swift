@@ -7,6 +7,23 @@ final class AppSettings: ObservableObject {
     private init() {
         loadThreadCounts()
         Self.migrateWebDAVPasswordToKeychain()
+        Self.migrateTapZonesToRightNext()
+    }
+
+    /// 迁移：老版本默认「点**左**侧 = 下一页」，2026-10-23 用户要求改成
+    /// 「点**右**侧 = 下一页」（更符合直觉，也和其他漫画 App 一致）。
+    ///
+    /// 只把**仍是旧默认值**的设置翻过来；用户自己改过的保持不动。
+    /// 用一次性标记，避免用户之后又手动改回左翻页时被再次翻转。
+    private static func migrateTapZonesToRightNext() {
+        let flag = "tapZones.rightNext.v1"
+        let ud = UserDefaults.standard
+        guard !ud.bool(forKey: flag) else { return }
+        ud.set(true, forKey: flag)
+        if ud.string(forKey: "tapZones") == "next,menu,prev" {
+            ud.set("prev,menu,next", forKey: "tapZones")
+            DiagLog.event("reader", "tapZones", "默认点击方向改为「右侧=下一页」")
+        }
     }
 
     /// 迁移：历史版本把 WebDAV 密码**明文**存在 `UserDefaults("webdavPass")`。
@@ -67,7 +84,7 @@ final class AppSettings: ObservableObject {
     @AppStorage("eyeCare") var eyeCare = false
     @AppStorage("brightness") var brightness = 0.5
     @AppStorage("doubleTapZoom") var doubleTapZoom = true
-    @AppStorage("tapZones") var tapZones = "next,menu,prev"   // 三分区动作
+    @AppStorage("tapZones") var tapZones = "prev,menu,next"   // 三分区动作（右=下一页）
 
     // 并发
     @AppStorage("searchThreads") var searchThreads = 32
