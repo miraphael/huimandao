@@ -8,6 +8,23 @@ final class AppSettings: ObservableObject {
         loadThreadCounts()
         Self.migrateWebDAVPasswordToKeychain()
         Self.migrateTapZonesToRightNext()
+        Self.migrateReaderNoDarkVeil()
+    }
+
+    /// 迁移：去掉阅读器那层「黑幕」（2026-10-23 用户明确要求）。
+    ///
+    /// 用户的设备上是「护眼 25% 黑 + 亮度 0.25（再叠约 15% 黑）」，
+    /// 两层叠加 ≈44% 的暗色 —— 看起来就是一层黑幕。
+    /// 这里**一次性**把护眼关掉、亮度归位到 0.5（= 原样），
+    /// 两个功能本身保留，用户想用可以随时再打开。
+    private static func migrateReaderNoDarkVeil() {
+        let flag = "reader.noDarkVeil.v1"
+        let ud = UserDefaults.standard
+        guard !ud.bool(forKey: flag) else { return }
+        ud.set(true, forKey: flag)
+        ud.set(false, forKey: "eyeCare")
+        ud.set(0.5, forKey: "brightness")
+        DiagLog.event("reader", "veil", "已关闭护眼 + 亮度归位 0.5（去除黑色蒙层）")
     }
 
     /// 迁移：老版本默认「点**左**侧 = 下一页」，2026-10-23 用户要求改成
