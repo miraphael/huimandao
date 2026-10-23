@@ -1693,7 +1693,7 @@ struct CurlPager: UIViewControllerRepresentable {
         pager.delegate = context.coordinator
         pager.view.backgroundColor = .black
         // ① 关掉系统「点边缘翻页」，交给我们的 tapZones
-        for gr in pager.gestureRecognizers where gr is UITapGestureRecognizer {
+        for gr in (pager.view.gestureRecognizers ?? []) where gr is UITapGestureRecognizer {
             gr.isEnabled = false
         }
         context.coordinator.currentIndex = page
@@ -1702,12 +1702,12 @@ struct CurlPager: UIViewControllerRepresentable {
         return pager
     }
 
-    func updateUIView(_ pager: UIPageViewController, context: Context) {
+    func updateUIViewController(_ pager: UIPageViewController, context: Context) {
         context.coordinator.parent = self
         context.coordinator.refreshCurrent()
 
         // ② 缩放时禁用翻页手势（只关 pan，保留我们自己的 tap）
-        for gr in pager.gestureRecognizers where !(gr is UITapGestureRecognizer) {
+        for gr in (pager.view.gestureRecognizers ?? []) where !(gr is UITapGestureRecognizer) {
             gr.isEnabled = scrollEnabled
         }
 
