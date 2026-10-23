@@ -181,6 +181,10 @@ struct ZoomableStripView: UIViewRepresentable {
         context.coordinator.host = host
         sv.addSubview(host.view)
         sv.decelerationRate = pageSnap ? .fast : .normal
+        if pageSnap {
+            sv.isDirectionalLockEnabled = true      // 只允许纵向，斜划不会左右晃
+            sv.showsVerticalScrollIndicator = false
+        }
 
         let dbl = UITapGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handleDoubleTap(_:)))
@@ -826,7 +830,21 @@ struct ZoomableStripView: UIViewRepresentable {
             let h = sv.bounds.height
             guard h > 1 else { return }
             let maxY = max(0, sv.contentSize.height - h)
-            var target = (targetContentOffset.pointee.y / h).rounded() * h
+            let cur = sv.contentOffset.y
+            let base = cur / h
+
+            // ① 先按系统投影（含惯性）取最近的一屏
+            var page = (targetContentOffset.pointee.y / h).rounded()
+
+            // ② **速度加成**：轻轻一划也算「想翻页」——
+            //    只看投影的话，小幅快扫会「弹回原位」，手感发黏。
+            if velocity.y > 0.25 { page = max(page, floor(base) + 1) }
+            if velocity.y < -0.25 { page = min(page, ceil(base) - 1) }
+
+            // ③ **单次最多翻一屏**（±1）：一甩跳过好几屏会让人失去位置感。
+            page = min(max(page, floor(base) - 1), floor(base) + 1)
+
+            var target = page * h
             target = max(0, min(target, maxY))
             targetContentOffset.pointee = CGPoint(x: sv.contentOffset.x, y: target)
         }
