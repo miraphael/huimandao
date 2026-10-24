@@ -37,7 +37,7 @@ struct HMDApp: App {
                 ThemeBackground(theme: themeStore.current, fillSafeArea: true)
                     .zIndex(0)
 
-                RootTabView()
+                AppShellView()
                     .environmentObject(AppSettings.shared)
                     .environmentObject(themeStore)
                     .tint(Theme.accent)

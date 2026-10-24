@@ -282,6 +282,9 @@ struct ReaderView: View {
                 .environment(\.colorScheme, Theme.isDark ? .dark : .light)
         }
         .toolbar(.hidden, for: .tabBar)
+        // 自绘底栏（AppShellView）也要跟着隐藏 —— 阅读必须全屏沉浸
+        .onAppear { ShellBarState.shared.hidden = true }
+        .onDisappear { ShellBarState.shared.hidden = false }
         // 阅读器恒定深色 → 导航栏也用深色配色，标题/按钮才看得见。
         // ⚠️ 故意**不用** `.preferredColorScheme(.dark)`：那会改整个 window 的深浅色，
         //    进/出阅读器时全 App 闪一下颜色 —— 正是我们要修的「打开/离开闪一下」。
