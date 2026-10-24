@@ -362,7 +362,7 @@ struct ChapterListView: View {
     var body: some View {
         // 🔴 必须跟随 `ascending`：原来这里**永远 reversed**，
         //    「正序/倒序」按钮是个假开关（点了没反应）。
-        List(ordered(info.chapters), selection: $selection) { ch in
+        List(ascending ? info.chapters : info.chapters.reversed(), selection: $selection) { ch in
             NavigationLink {
                 ReaderView(info: info, startChapter: ch,
                            startPage: ResumeLocator.page(for: ch, info: info, progress: resumeProgress))
