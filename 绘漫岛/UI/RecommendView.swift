@@ -23,6 +23,7 @@ struct RecommendView: View {
     @State private var moreMessage = ""
     /// 漫画台空着时的**具体原因**（别只写「还没有图源」—— 用户明明有源）
     @State private var emptyReason = ""
+    @State private var showLogin = false
 
     var body: some View {
         if embedded {
@@ -53,18 +54,22 @@ struct RecommendView: View {
                             Text("无可用图源（先到「图源」导入）")
                         }
                     } label: {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 5) {
+                            Text("发现 · ")
+                                .font(.system(size: 15))
+                                .foregroundStyle(Theme.text.opacity(0.45))
                             Text(selectedSource?.bookSourceName ?? "选择图源")
-                                .font(.headline)
-                            Image(systemName: "chevron.down").font(.caption)
+                                .font(.system(size: 15, weight: .semibold))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
                         }
-                        .foregroundStyle(Theme.onAccent)
+                        .foregroundStyle(Theme.text)
                     }
                     Spacer()
                 }
                 .padding(.horizontal, 16)
-                .frame(height: 44)
-                .background(Theme.accent)
+                .frame(height: 46)
 
                 // 栏目横向 Tab（每日更新/综合榜/自制榜…）
                 if !columns.isEmpty {
@@ -128,11 +133,26 @@ struct RecommendView: View {
                     .padding(.top, 6)
                 }
                 .refreshable { await load(page: 1) }
+                .sheet(isPresented: $showLogin) {
+                    if let src = selectedSource {
+                        NavigationStack { SourceLoginView(source: src) }
+                    }
+                }
                 .overlay {
                     if loading && items.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
                     if !loading && items.isEmpty && !columns.isEmpty {
+                        // 🔴 卡拉这类源需要**网页登录拿令牌**，否则抓取一直失败
+                        //    （真机日志：`[browse] find ❌ 抓取失败 .../type/Cc-----.html` 反复出现）。
+                        //    有 loginUrl 的源给出明确的引导动作，而不是让用户猜。
+                        let needsLogin = selectedSource?.loginUrl?.isEmpty == false
+                                     && selectedSource?.loginUrlResult?.isEmpty != false
                         EmptyState(title: "该栏目暂无内容", systemImage: "sparkles",
-                                   description: "图源可能需要网络代理，或换个栏目/图源试试")
+                                   description: needsLogin
+                                       ? "「\(selectedSource?.bookSourceName ?? "该图源")」需要先网页登录获取访问令牌，否则抓取会一直失败"
+                                       : "图源可能需要网络代理，或换个栏目/图源试试",
+                                   actionTitle: needsLogin ? "去网页登录" : nil) {
+                            showLogin = true
+                        }
                     }
                     if !loading && sources.isEmpty {
                         EmptyState(title: emptyReason.isEmpty ? "还没有图源" : emptyReason,
