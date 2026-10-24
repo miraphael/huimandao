@@ -813,6 +813,11 @@ struct ZoomableStripView: UIViewRepresentable {
         func scrollViewDidEndDragging(_ sv: UIScrollView, willDecelerate decelerate: Bool) {
             guard !decelerate else { return }   // 还有惯性 → 等 didEndDecelerating
             reportCurrentPage(sv)
+            // 拖动期间被推迟的偏移补偿，停下后补一次
+            if needsRefreshAfterScroll {
+                needsRefreshAfterScroll = false
+                refresh(sv)
+            }
         }
 
         func scrollViewDidEndDecelerating(_ sv: UIScrollView) {
@@ -821,12 +826,6 @@ struct ZoomableStripView: UIViewRepresentable {
                 needsRefreshAfterScroll = false
                 refresh(sv)
             }
-        }
-
-        func scrollViewDidEndDragging(_ sv: UIScrollView, willDecelerate decelerate: Bool) {
-            guard !decelerate, needsRefreshAfterScroll else { return }
-            needsRefreshAfterScroll = false
-            refresh(sv)
         }
 
         /// 按屏翻页：滚动指定距离（点），带边界钳制。缩放态下不响应。
