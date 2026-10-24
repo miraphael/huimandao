@@ -85,6 +85,8 @@ struct SourceListView: View {
     @State private var editMode: EditMode = .inactive
     /// 分享面板的内容（图源 JSON 文本）
     @State private var shareItems: [Any]? = nil
+    /// 「继续阅读」横滑条的数据（书架里有进度的前 10 本）
+    @State private var recent: [ShelfItem] = []
 
     var body: some View {
         if embedded {
@@ -189,10 +191,7 @@ struct SourceListView: View {
             }
             .onAppear { reload() }
             // 导入 / 删除 / 启停后**立即刷新**，不必杀掉 App 重开
-            .onReceive(NotificationCenter.default.publisher(for: .hmdSourcesChanged)) { _ in
-                reload()
-            }
-            // 后台导入/修复图源时，边解边刷新（首次启动要几十秒）
+            // 后台导入/修复图源时边解边刷新；导入/删除/启停后立即刷新
             .onReceive(NotificationCenter.default.publisher(for: .hmdSourcesChanged)) { _ in reload() }
             .overlay(alignment: .top) {
                 if let toast {
@@ -635,10 +634,50 @@ struct SourceListView: View {
     /// 列表内容：按域名分组 / 平铺（拆成独立子视图，避免类型检查超时）
     @ViewBuilder
     private var listContent: some View {
+        continueSection
         if groupByHost {
             groupedRows
         } else {
             flatRows
+        }
+    }
+
+    /// 「继续阅读」横滑条 —— 漫画台现在只剩图源，进来是「管理」而不是「看」。
+    /// 这里把书架里**有进度**的书顶上来，点一下直接续读（走 `ShelfContinueView`）。
+    @ViewBuilder
+    private var continueSection: some View {
+        if !recent.isEmpty {
+            Section {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(recent) { it in
+                            NavigationLink { ShelfContinueView(item: it) } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    CoverImage(url: it.coverUrl)
+                                        .frame(width: 66, height: 90)
+                                        .hmdThumb()
+                                    Text(it.name)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(Theme.text)
+                                        .lineLimit(1)
+                                    Text(it.durChapterName.isEmpty ? it.lastChapterName : it.durChapterName)
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(Theme.text.opacity(0.45))
+                                        .lineLimit(1)
+                                }
+                                .frame(width: 66, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.trailing, 14)
+                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 0))
+                .listRowBackground(Color.clear)
+            } header: {
+                Label("继续阅读", systemImage: "bookmark.fill")
+            }
         }
     }
 
@@ -700,6 +739,11 @@ struct SourceListView: View {
         sources = ComicRepository.shared.allSources()
         // JS 类源与规则类源同列表展示，一起刷新
         jsItems = JSSourceStore.list()
+        // 「继续阅读」：只取有进度的书（durChapterUrl 非空），最多 10 本。
+        // ⚠️ 必须在这里读一次缓存起来 —— 放进 body 会在每次重绘时打一次全表查询。
+        recent = Array(ComicRepository.shared.shelfList()
+            .filter { !$0.durChapterUrl.isEmpty || !$0.durChapterName.isEmpty }
+            .prefix(10))
     }
 
     /// 停用「预置健康清单」里已知不可用的源。
