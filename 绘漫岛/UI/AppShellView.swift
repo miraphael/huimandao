@@ -117,7 +117,8 @@ struct AppShellView: View {
             }
         }
         .padding(.top, 7)
-        .background(.bar)
+        // 🔴 Legado 截图：底栏**没有白色条**，就是页面背景色自然延续 + 顶部细线
+        .background(Theme.background)
         .overlay(alignment: .top) {
             Rectangle().fill(HMD.stroke).frame(height: 0.6)
         }

@@ -487,9 +487,14 @@ struct SourceListView: View {
     /// 行的两行文字（拆出来单独类型检查，避免整行表达式过大）
     @ViewBuilder
     private func sourceInfo(_ s: ComicSource) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text(displayName(s)).lineLimit(1)
+                // 🔴 源名用**强调色 + 圆体粗字**（Legado：`.source-name{color:accent;
+                //    font-weight:600}`，它还是等宽 12px —— 名字在这里更醒目更合适）
+                Text(displayName(s))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
                 if !s.isEnabled {
                     Text("已停用").font(.caption2).foregroundStyle(.secondary)
                 }
@@ -503,7 +508,9 @@ struct SourceListView: View {
                         .frame(width: 5, height: 5)
                 }
                 Text(subtitle(s))
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Theme.text.opacity(0.45))
+                    .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

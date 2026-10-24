@@ -286,11 +286,35 @@ final class ThemeStore: ObservableObject {
         proxy.standardAppearance = app
         proxy.scrollEdgeAppearance = app
 
+        // 🔴 导航栏**标题**用强调色（Legado 截图：顶栏标题是蓝色的）。
+        //    阅读器把导航栏整个隐藏了（`.toolbar(.hidden, for: .navigationBar)`），
+        //    所以这里改全局不会影响阅读画面。
+        let nav = UINavigationBarAppearance()
+        nav.configureWithDefaultBackground()
+        nav.titleTextAttributes = [.foregroundColor: UIColor(t.accentColor)]
+        let navProxy = UINavigationBar.appearance()
+        navProxy.standardAppearance = nav
+        navProxy.scrollEdgeAppearance = nav
+        navProxy.compactAppearance = nav
+
         for scene in UIApplication.shared.connectedScenes {
             guard let ws = scene as? UIWindowScene else { continue }
             for win in ws.windows {
                 Self.applyTabAppearance(app, in: win)
+                Self.applyNavAppearance(nav, in: win)
             }
+        }
+    }
+
+    /// 把导航栏新外观推到**已存在**的导航栏上（appearance() 只对新建的生效）
+    private static func applyNavAppearance(_ app: UINavigationBarAppearance, in view: UIView) {
+        if let bar = view as? UINavigationBar {
+            bar.standardAppearance = app
+            bar.scrollEdgeAppearance = app
+            bar.compactAppearance = app
+        }
+        for sub in view.subviews {
+            applyNavAppearance(app, in: sub)
         }
     }
 
