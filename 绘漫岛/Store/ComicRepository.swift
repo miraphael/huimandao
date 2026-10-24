@@ -33,6 +33,10 @@ final class ComicRepository {
         _sourcesEnabled = nil
         _sourceByHost = nil
         sourceCacheLock.unlock()
+        // 通知所有在屏的列表刷新（导入 / 删除 / 启停都会走到这里）
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .hmdSourcesChanged, object: nil)
+        }
     }
 
     func allSources(includeDisabled: Bool = true) -> [ComicSource] {

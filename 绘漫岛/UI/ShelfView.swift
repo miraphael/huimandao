@@ -591,12 +591,22 @@ struct CoverImage: View {
         var hh: [String: String] = [:]
         if !ref.isEmpty { hh["Referer"] = ref }
         if !uag.isEmpty { hh["User-Agent"] = uag }
-        guard let req = HMDImagePipeline.request(url: url, referer: ref, ua: uag, headers: hh) else { return nil }
+        guard let req = HMDImagePipeline.request(url: url, referer: ref, ua: uag, headers: hh) else {
+            DiagLog.event("cover", "badurl", "封面地址无效：\(url.prefix(90))")
+            return nil
+        }
         // ⚠️ `ImagePipeline.image(for:)` 直接返回 `PlatformImage`（= `UIImage`），
         //    **不是** `ImageResponse`，所以没有 `.image` 成员
         //    （写过会报 "value of type 'PlatformImage' has no member 'image'"）。
         //    返回类型是 `PlatformImage` 而非可选，成功即图片，失败则抛错。
-        return try? await HMDImagePipeline.shared.image(for: req)
+        do {
+            return try await HMDImagePipeline.shared.image(for: req)
+        } catch {
+            // 诊断：封面为什么空 —— 记 host + 错误，别记完整 URL（可能带签名）
+            let host = URL(string: url)?.host ?? "?"
+            DiagLog.event("cover", "fail", "\(host) 封面失败：\(error.localizedDescription)")
+            return nil
+        }
     }
 }
 

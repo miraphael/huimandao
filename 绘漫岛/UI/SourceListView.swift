@@ -188,6 +188,10 @@ struct SourceListView: View {
                 NavigationStack { SourceEditorView(source: src) { reload() } }
             }
             .onAppear { reload() }
+            // 导入 / 删除 / 启停后**立即刷新**，不必杀掉 App 重开
+            .onReceive(NotificationCenter.default.publisher(for: .hmdSourcesChanged)) { _ in
+                reload()
+            }
             // 后台导入/修复图源时，边解边刷新（首次启动要几十秒）
             .onReceive(NotificationCenter.default.publisher(for: .hmdSourcesChanged)) { _ in reload() }
             .overlay(alignment: .top) {

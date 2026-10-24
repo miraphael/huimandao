@@ -353,17 +353,10 @@ struct ReaderView: View {
                 .accessibilityLabel("阅读设置")
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            // 悬浮圆角条 + 毛玻璃：比原来的「一整条纯黑」轻，也更像成品
-            .background(.ultraThinMaterial,
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.white.opacity(0.12), lineWidth: 0.8)
-            )
-            .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 4)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            // 整条贴边（不悬浮）：用户要求顶栏更靠上、更贴合屏幕边缘
+            .background(.ultraThinMaterial)
 
             // 章节数小框（离线角标 + 页码 + 第 X/Y 章）
             // **点一下直接开章节列表** —— 用户直觉就是点这里换章，
@@ -1166,7 +1159,7 @@ struct ReaderView: View {
                                 Text("\(Int(s.brightness * 100))%")
                                     .font(.caption.monospacedDigit().weight(.semibold))
                                     .padding(.horizontal, 9).padding(.vertical, 3)
-                                    .background(Color.white.opacity(0.09), in: Capsule())
+                                    .background(Color.primary.opacity(0.07), in: Capsule())
                             }
                             HStack(spacing: 10) {
                                 Image(systemName: "sun.min")
@@ -1234,7 +1227,10 @@ struct ReaderView: View {
                 }
                 .padding(16)
             }
-            .background(Color(white: 0.06).ignoresSafeArea())
+            // 🔴 原来是写死的 `Color(white: 0.06)` —— 跟 colorScheme 无关，
+            //    所以不管怎么改环境色，面板永远是黑的（用户反馈「阅读设置是黑色」）。
+            //    现在跟随主题：浅色主题就是浅色面板。
+            .background(Theme.background.ignoresSafeArea())
             .navigationTitle("阅读设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1269,11 +1265,11 @@ struct ReaderView: View {
             VStack(alignment: .leading, spacing: 12) { content() }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(white: 0.12),
+                .background(Theme.surface,
                             in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                        .strokeBorder(HMD.stroke, lineWidth: 1)
                 )
         }
     }
@@ -1288,7 +1284,7 @@ struct ReaderView: View {
                 .font(.caption.weight(on ? .semibold : .regular))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 7)
-                .background(on ? Theme.accent.opacity(0.22) : Color.white.opacity(0.07),
+                .background(on ? Theme.accent.opacity(0.22) : Color.primary.opacity(0.06),
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1300,7 +1296,7 @@ struct ReaderView: View {
     }
 
     private var settingsDivider: some View {
-        Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+        Rectangle().fill(Color.primary.opacity(0.07)).frame(height: 1)
     }
 
     private func settingsToggle(_ title: String, icon: String, isOn: Binding<Bool>) -> some View {

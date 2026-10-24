@@ -90,87 +90,68 @@ struct ComicDetailView: View {
                     }
                     .padding(.horizontal)
 
-                    HStack {
-                        Button {
-                            if inShelf { ComicRepository.shared.removeFromShelf(noteUrl: info.noteUrl) }
-                            else { ComicRepository.shared.addToShelf(info: info) }
-                            inShelf = ComicRepository.shared.inShelf(noteUrl: info.noteUrl)
-                        } label: {
-                            Label(inShelf ? "已在书架" : "加入书架", systemImage: inShelf ? "checkmark" : "plus")
-                                .frame(maxWidth: .infinity)
+                    // ── 主操作：开始阅读（整行主按钮，强调色）
+                    NavigationLink {
+                        // 「开始阅读」的去向：
+                        //   ① 有阅读进度 → 直接跳上次那一章那一页
+                        //   ② 只有一章 → 直接进阅读器（图集类站点一个相册就是一章）
+                        //   ③ 其余 → 进章节列表
+                        if let p = ComicRepository.shared.progress(noteUrl: info.noteUrl),
+                           p.page > 0 || !p.chapterUrl.isEmpty,
+                           let last = info.chapters.first(where: { $0.url == p.chapterUrl }) {
+                            ReaderView(info: info, startChapter: last, startPage: p.page)
+                        } else if info.chapters.count == 1, let only = info.chapters.first {
+                            ReaderView(info: info, startChapter: only)
+                        } else {
+                            ChapterListView(info: info, resumeProgress: resumeProgress)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(isManga
-                              ? (inShelf ? (Color(hex: "#8E897A") ?? .gray) : (Color(hex: "#14141A") ?? .black))
-                              : (inShelf ? .gray : .pink))
-                        NavigationLink {
-                            // 「开始阅读」的去向：
-                            //   ① 有阅读进度 → 直接跳上次那一章那一页
-                            //   ② **只有一章** → 直接进阅读器，不再让用户多点一次
-                            //      图集类站点（紳士漫畫 wnacg 就是这种）一个相册就是一章，
-                            //      章名恒为「正文」。旧行为是先进一个只有一行「正文」的
-                            //      章节列表，用户反馈「只显示一个正文，然后就没了」。
-                            //   ③ 其余 → 进章节列表
-                            // ⚠️ `ComicInfo` 本身不带进度字段（进度存在书架表里），
-                            //    必须走 `ComicRepository.progress(noteUrl:)` 查。
-                            if let p = ComicRepository.shared.progress(noteUrl: info.noteUrl),
-                               p.page > 0 || !p.chapterUrl.isEmpty,
-                               let last = info.chapters.first(where: { $0.url == p.chapterUrl }) {
-                                ReaderView(info: info, startChapter: last, startPage: p.page)
-                            } else if info.chapters.count == 1, let only = info.chapters.first {
-                                ReaderView(info: info, startChapter: only)
-                            } else {
-                                ChapterListView(info: info, resumeProgress: resumeProgress)
-                            }
-                        } label: {
-                            Label("开始阅读", systemImage: "book").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(isManga ? (Color(hex: "#14141A") ?? .black) : .pink)
-                        .disabled(info.chapters.isEmpty)
+                    } label: {
+                        Label(startReadingLabel, systemImage: "book.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 3)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
+                    .disabled(info.chapters.isEmpty)
+                    // ⚠️ 和下面「下载」是两个**同类型**的 NavigationLink：
+                    //    不给稳定 id 时 SwiftUI 可能复用同一个 destination，
+                    //    表现就是「点开始阅读，进去却是下载模式」（用户反馈）。
+                    .id("hmd.startReading")
                     .padding(.horizontal)
 
-                    // 次行操作：下载 / 换源 / 刷新章节
-                    HStack(spacing: 8) {
+                    // ── 次操作：三宫格（加入书架 / 下载 / 换源）
+                    HStack(spacing: 10) {
+                        Button { toggleShelf() } label: {
+                            actionTile(inShelf ? "已在书架" : "加入书架",
+                                       icon: inShelf ? "checkmark.circle.fill" : "plus.circle.fill",
+                                       active: inShelf)
+                        }
+                        .buttonStyle(.plain)
+
                         NavigationLink {
                             ChapterListView(info: info, resumeProgress: resumeProgress, downloadMode: true)
                         } label: {
-                            Label("下载", systemImage: "arrow.down.circle").frame(maxWidth: .infinity)
+                            actionTile("下载", icon: "arrow.down.circle.fill", active: false)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
                         .disabled(info.chapters.isEmpty)
+                        .id("hmd.download")
 
                         NavigationLink {
                             // ⚠️ 两个坑（都踩过，CI 实测报错）：
                             //   ① 不要传 `id:` —— `SearchResult.id` 是**计算属性**
-                            //      （`"\(origin)|\(noteUrl)"`），没有 setter，
-                            //      也不在 memberwise init 的参数表里
-                            //      → `extra argument 'id' in call`
-                            //   ② **实参顺序必须与属性声明顺序一致**，Swift 的
-                            //      memberwise init 不按标签重排
-                            //      → `argument 'lastChapter' must precede argument 'origin'`
+                            //   ② **实参顺序必须与属性声明顺序一致**
                             MultiSourceDetail(name: info.name, firstHit: SearchResult(
                                 name: info.name, author: info.author, coverUrl: info.coverUrl,
                                 lastChapter: info.lastChapter, noteUrl: info.noteUrl,
                                 origin: info.origin, originName: info.origin,
                                 noteHeaders: noteHeaders))
                         } label: {
-                            Label("换源", systemImage: "arrow.left.arrow.right").frame(maxWidth: .infinity)
+                            actionTile("换源", icon: "arrow.left.arrow.right.circle.fill", active: false)
                         }
-                        .buttonStyle(.bordered)
-
-                        Button {
-                            // ⚠️ 不能在 `if let info { ... }` 里直接写 `info = ...` ——
-                            //    那个 `info` 是 **let 常量**（shadow 了 @State 属性），
-                            //    编译报 `cannot assign to value: 'info' is a 'let' constant`（CI 实测）。
-                            //    收进方法里，方法内 `info` 解析到 @State 属性（其 setter 是
-                            //    nonmutating，非 mutating 方法里也能赋值）。
-                            Task { await reload() }
-                        } label: {
-                            Label("刷新", systemImage: "arrow.clockwise").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
+                        .id("hmd.switchSource")
                     }
                     .padding(.horizontal)
 
@@ -287,6 +268,44 @@ struct ComicDetailView: View {
 
     private func resumePage(for ch: ComicInfo.Chapter) -> Int {
         ResumeLocator.page(for: ch, info: info, progress: resumeProgress)
+    }
+
+    // MARK: - 操作区（详情页主/次按钮）
+
+    /// 「开始阅读 / 继续阅读」文案：有进度就叫继续，更符合直觉
+    private var startReadingLabel: String {
+        guard let p = ComicRepository.shared.progress(noteUrl: noteUrl),
+              p.page > 0 || !p.chapterUrl.isEmpty else { return "开始阅读" }
+        return "继续阅读"
+    }
+
+    /// 加入 / 移出书架（原逻辑抽出来，供宫格按钮复用）
+    private func toggleShelf() {
+        if inShelf {
+            ComicRepository.shared.removeFromShelf(noteUrl: info.noteUrl)
+        } else {
+            ComicRepository.shared.addToShelf(info: info)
+        }
+        inShelf = ComicRepository.shared.inShelf(noteUrl: info.noteUrl)
+    }
+
+    /// 次操作宫格里的一个格子：图标 + 小字，选中态用强调色浅底
+    private func actionTile(_ title: String, icon: String, active: Bool) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 17, weight: .semibold))
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(active ? Theme.accent : Theme.text.opacity(0.78))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(active ? Theme.accent.opacity(0.12) : Color.primary.opacity(0.05),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(active ? Theme.accent.opacity(0.35) : HMD.stroke, lineWidth: 0.8)
+        )
     }
 
     /// 按分卷聚合；无分卷时返回单组
