@@ -1624,10 +1624,12 @@ struct StoreImage: View {
                 }
                 .frame(minHeight: placeholderHeight)
                 .task {
-                    // 诊断：翻页若仍「黑一下」，看这行就知道是不是占位导致的
-                    // （预载正常时不该出现）。
+                    // 诊断：占位出现即记一条（预载正常时不该出现）。
                     DiagLog.event("img", "placeholder", "页 \(index + 1) 未就绪，显示占位")
-                    _ = await store.image(at: index)
+                    // 🔴 用 **`.ahead` 低优先级**：长条会一次渲染 8 页，占位页里
+                    //    绝大多数在视口之外。以前它们按 `.visible` 抢连接，把真正的
+                    //    可见页挤到后面 —— 用户看到的就是「当前这页要等一下才出图」。
+                    _ = await store.image(at: index, priority: .ahead)
                 }
             }
         }

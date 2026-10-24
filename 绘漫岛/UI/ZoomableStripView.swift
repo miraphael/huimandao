@@ -258,6 +258,8 @@ struct ZoomableStripView: UIViewRepresentable {
         var host: UIHostingController<StripContentView>?
         weak var doubleTap: UITapGestureRecognizer?
         var lastScrollSeq = 0
+        /// 拖动期间被推迟的偏移补偿（停下后补一次）
+        var needsRefreshAfterScroll = false
 
         /// 每页高度（与 `StripContentView` 用**同一个** `StripMetrics` 算出来）
         private var heights: [CGFloat] = []
@@ -447,7 +449,14 @@ struct ZoomableStripView: UIViewRepresentable {
             //
             //    页是**追加**的（index 稳定、不插入不重排），所以用**旧表**定位出的锚点页
             //    在新表里依然有效 —— 只要它没超出新表长度。
-            if !oldCum.isEmpty, oldTotal != total, oldTop > 0, sv.bounds.height > 0 {
+            // 🔴 拖动 / 惯性期间**不做偏移补偿**（2026-10-24）：
+            //    日志实测 `[viewport] 改高` 一次阅读触发 **300 次**，每次图片加载完
+            //    都会重算总高并改 `contentOffset` —— 滑动被反复打断，手感发涩。
+            //    现在拖动中只更新 contentSize，停下后由 `didEndDecelerating` /
+            //    `didEndDragging` 补一次补偿。
+            if sv.isDragging || sv.isDecelerating {
+                needsRefreshAfterScroll = true
+            } else if !oldCum.isEmpty, oldTotal != total, oldTop > 0, sv.bounds.height > 0 {
                 let idx = page(at: oldTop, in: oldCum)
                 if idx >= cumY.count || idx >= heights.count {
                     // 锚点页在新表里不存在（极罕见：章节内容被换掉/页数变少）
@@ -808,6 +817,16 @@ struct ZoomableStripView: UIViewRepresentable {
 
         func scrollViewDidEndDecelerating(_ sv: UIScrollView) {
             reportCurrentPage(sv)
+            if needsRefreshAfterScroll {
+                needsRefreshAfterScroll = false
+                refresh(sv)
+            }
+        }
+
+        func scrollViewDidEndDragging(_ sv: UIScrollView, willDecelerate decelerate: Bool) {
+            guard !decelerate, needsRefreshAfterScroll else { return }
+            needsRefreshAfterScroll = false
+            refresh(sv)
         }
 
         /// 按屏翻页：滚动指定距离（点），带边界钳制。缩放态下不响应。
