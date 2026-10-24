@@ -155,38 +155,55 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// 账号卡
+    /// 账号卡 —— 强调色渐变横幅（不再是「系统灰卡片 + 一行字」）
     private var accountCard: some View {
         NavigationLink { AccountView() } label: {
-            HStack(spacing: 12) {
-                Text(acc.isRegistered ? acc.avatar : "👤")
-                    .font(.system(size: 24))
-                    .frame(width: 46, height: 46)
-                    .background(Theme.accent.opacity(0.14), in: Circle())
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(acc.isRegistered ? acc.nickname : "未登录")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
-                    Text(acc.isRegistered
-                         ? "书架 \(acc.booksRead) 本 · 已读 \(acc.chaptersRead) 话 · 连续 \(acc.streakDays) 天"
-                         : "点此创建一个本地阅读档案")
-                        .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Text(acc.isRegistered ? acc.avatar : "👤")
+                        .font(.system(size: 26))
+                        .frame(width: 54, height: 54)
+                        .background(.white.opacity(0.20), in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(acc.isRegistered ? acc.nickname : "未登录")
+                            .font(.system(size: 19, weight: .bold, design: .rounded))
+                        Text(acc.isRegistered ? "本地阅读档案" : "点此创建一个本地阅读档案")
+                            .font(.system(size: 12))
+                            .opacity(0.85)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .bold))
+                        .opacity(0.75)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                if acc.isRegistered {
+                    HStack(spacing: 0) {
+                        statCell("\(acc.booksRead)", "书架")
+                        Rectangle().fill(.white.opacity(0.22))
+                            .frame(width: 1, height: 26)
+                        statCell("\(acc.chaptersRead)", "已读")
+                        Rectangle().fill(.white.opacity(0.22))
+                            .frame(width: 1, height: 26)
+                        statCell("\(acc.streakDays)", "连续天")
+                    }
+                }
             }
-            .padding(14)
+            .foregroundStyle(.white)
+            .padding(16)
+            .background(
+                LinearGradient(colors: [Theme.accent, Theme.accent.opacity(0.66)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing),
+                in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+            )
+            .shadow(color: Theme.accent.opacity(0.30), radius: 16, x: 0, y: 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-        )
     }
 
     /// 「我的内容」四宫格

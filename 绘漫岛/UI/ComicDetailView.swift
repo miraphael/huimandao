@@ -175,10 +175,8 @@ struct ComicDetailView: View {
                     .padding(.horizontal)
 
                     if !info.introduce.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("简介").font(.headline)
-                            Text(info.introduce.trimmingCharacters(in: .whitespacesAndNewlines)).font(.footnote).foregroundStyle(.secondary)
-                        }.padding(.horizontal)
+                        SynopsisCard(text: info.introduce)
+                            .padding(.horizontal)
                     }
 
                     HStack(spacing: 8) {
@@ -576,5 +574,51 @@ struct LocalReaderView: View {
                 pages = await Task.detached { LocalComicScanner.pages(of: comic).compactMap(UIImage.init(data:)) }.value
             }
         }
+    }
+}
+
+
+/// 简介卡片 —— 可折叠（3 行 → 展开全文）。
+///
+/// 设计要点：
+///  · 左侧一道强调色竖条作视觉锚点，和「行卡片」的语言一致；
+///  · 默认只显示 3 行，超长才出现「展开」，避免详情页被一大段文字撑长；
+///  · 13pt / 行距 4 / 72% 透明度 —— 比系统 `.footnote` 更好读。
+private struct SynopsisCard: View {
+    let text: String
+    @State private var expanded = false
+
+    private var bodyText: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Theme.accent)
+                    .frame(width: 3, height: 15)
+                Text("简介")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Theme.text)
+                Spacer(minLength: 0)
+                if bodyText.count > 90 {
+                    Button(expanded ? "收起" : "展开") {
+                        withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                }
+            }
+            Text(bodyText)
+                .font(.system(size: 13))
+                .lineSpacing(4)
+                .foregroundStyle(Theme.text.opacity(0.72))
+                .lineLimit(expanded ? nil : 3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .hmdCard(radius: 16)
     }
 }

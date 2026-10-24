@@ -236,10 +236,26 @@ struct ShelfCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topTrailing) {
-                CoverImage(url: item.coverUrl)
-                    .frame(height: 140)
-                    // 统一封面语言：12pt 圆角 + 细描边 + 轻投影（见 `HMD.hmdThumb`）
-                    .hmdThumb()
+                // 封面 + 底部渐隐信息条（把「读到第几话」压到图上，
+                // 省掉下面第二行文字，网格更干净）
+                ZStack(alignment: .bottomLeading) {
+                    CoverImage(url: item.coverUrl)
+                        .frame(height: 140)
+                    if !coverSubtitle.isEmpty {
+                        LinearGradient(colors: [.clear, .black.opacity(0.62)],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: 40)
+                            .allowsHitTesting(false)
+                        Text(coverSubtitle)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .lineLimit(1)
+                            .padding(.horizontal, 6)
+                            .padding(.bottom, 5)
+                    }
+                }
+                // 统一封面语言：12pt 圆角 + 细描边 + 轻投影（见 `HMD.hmdThumb`）
+                .hmdThumb()
                 if item.hasUpdate {
                     // 显示「N 章」而不是一个红点 —— 用户能一眼看出更新了几话，
                     // 而不是点进去才知道。数量拿不到时退化成「更新」。
@@ -255,10 +271,7 @@ struct ShelfCell: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
-            Text(item.durChapterName.isEmpty ? item.lastChapterName : "读到:\(item.durChapterName)")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.text.opacity(0.45))
-                .lineLimit(1)
+
         }
         // 书架是**网格**——一屏可能十几本书。`LazyVGrid` 只创建可视区内 + 少量缓冲的 cell，
         // 用户快速滑动时会看到一片灰底转圈。
@@ -266,6 +279,12 @@ struct ShelfCell: View {
         // 不占内存），滑过去时就是缓存命中、直接出图。
         // 借鉴 Aidoku `Features/Library` 的网格预取做法。
         .onAppear { prefetchNeighbors(in: all) }
+    }
+
+    /// 封面底部那行小字：优先「读到 X」，否则最近更新话数
+    private var coverSubtitle: String {
+        if !item.durChapterName.isEmpty { return "读到 \(item.durChapterName)" }
+        return item.lastChapterName
     }
 
     /// 把当前 cell 之后的若干本封面排进预取队列

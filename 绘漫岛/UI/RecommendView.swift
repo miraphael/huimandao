@@ -92,39 +92,41 @@ struct RecommendView: View {
                     .frame(height: 40)
                 }
 
-                // 内容列表
-                List {
-                    ForEach(items) { r in
-                        NavigationLink {
-                            ComicDetailView(noteUrl: r.noteUrl, origin: r.origin, noteHeaders: r.noteHeaders)
-                        } label: {
-                            RecommendCell(r: r)
-                        }
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
-                    }
-                    if !items.isEmpty {
-                        HStack {
-                            Spacer()
-                            if loadingMore {
-                                ProgressView()
-                            } else if hasMore {
-                                Button("加载更多") { Task { await loadMore() } }
-                                    .font(.callout)
-                                    .foregroundStyle(.tint)
-                            } else {
-                                Text(moreMessage.isEmpty ? "没有更多内容" : moreMessage)
-                                    .font(.caption).foregroundStyle(.secondary)
+                // 内容列表 —— 用 ScrollView + LazyVStack 而不是 List：
+                // 🔴 `List` 里的 `NavigationLink` 会在右侧自动加一个**箭头**（disclosure
+                //    indicator），而这里每行本身就是一张卡片，箭头纯属多余且挡内容
+                //    （2026-10-24 用户反馈「右箭头不需要，影响观看」）。
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(items) { r in
+                            NavigationLink {
+                                ComicDetailView(noteUrl: r.noteUrl, origin: r.origin, noteHeaders: r.noteHeaders)
+                            } label: {
+                                RecommendCell(r: r)
                             }
-                            Spacer()
+                            .buttonStyle(.plain)   // 去掉系统蓝色高亮
+                        }
+                        if !items.isEmpty {
+                            HStack {
+                                Spacer()
+                                if loadingMore {
+                                    ProgressView()
+                                } else if hasMore {
+                                    Button("加载更多") { Task { await loadMore() } }
+                                        .font(.callout)
+                                        .foregroundStyle(.tint)
+                                } else {
+                                    Text(moreMessage.isEmpty ? "没有更多内容" : moreMessage)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 12)
                         }
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 6)
                 }
-                .transparentScrollBackground()
-                .listStyle(.plain)
-                // 只隐藏滚动背景；主题背景由外层（tab 根）铺 —— 见 RootTabView 的说明
-                .scrollContentBackgroundCompat()
                 .refreshable { await load(page: 1) }
                 .overlay {
                     if loading && items.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }

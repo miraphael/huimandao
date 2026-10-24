@@ -359,11 +359,13 @@ struct FindView: View {
     }
 
     private var content: some View {
-        List(columns) { col in
-            NavigationLink {
-                FindColumnView(column: col)
-            } label: {
-                HStack(spacing: 12) {
+        ScrollView {
+            LazyVStack(spacing: 8) {
+                ForEach(columns) { col in
+                    NavigationLink {
+                        FindColumnView(column: col)
+                    } label: {
+                        HStack(spacing: 12) {
                     // 栏目图标：强调色浅底方块（统一「行卡片」的左视觉锚点）
                     Image(systemName: "square.grid.2x2.fill")
                         .font(.system(size: 14, weight: .semibold))
@@ -381,12 +383,14 @@ struct FindView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(10)
-                .hmdRowCard()
+                        .padding(10)
+                        .hmdRowCard()
+                    }
+                    .buttonStyle(.plain)   // 去掉 List 里的右箭头
+                }
             }
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+            .padding(.horizontal, 14)
+            .padding(.top, 6)
         }
         .navigationTitle("发现")
         .onAppear { columns = ComicEngine.shared.findColumns() }
@@ -400,15 +404,18 @@ struct FindColumnView: View {
     @State private var page = 1
 
     var body: some View {
-        List(results) { r in
-            NavigationLink {
-                ComicDetailView(noteUrl: r.noteUrl, origin: r.origin)
-            } label: { ResultCell(r: r) }
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+        ScrollView {
+            LazyVStack(spacing: 8) {
+                ForEach(results) { r in
+                    NavigationLink {
+                        ComicDetailView(noteUrl: r.noteUrl, origin: r.origin)
+                    } label: { ResultCell(r: r) }
+                    .buttonStyle(.plain)   // 去掉 List 里的右箭头
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 6)
         }
-        .listStyle(.plain)
         .navigationTitle(column.title)
         .overlay { if loading { ProgressView() } }
         .task {
