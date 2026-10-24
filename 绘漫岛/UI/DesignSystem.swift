@@ -31,8 +31,37 @@ enum HMD {
         static let xl: CGFloat = 28
     }
 
-    /// 卡片描边：浅色主题用黑 6%，深色主题用白 8%
-    static var stroke: Color { Color.primary.opacity(Theme.isDark ? 0.09 : 0.06) }
+    /// 字号（对齐 Legado 的 --fs-11/13/15）
+    enum T {
+        static let fs11: CGFloat = 11
+        static let fs13: CGFloat = 13
+        static let fs15: CGFloat = 15
+    }
+
+    /// 语义色（Legado：#f87171 / #4ade80 / #fbbf24 / #2080f0）
+    enum Semantic {
+        static var error: Color { Color(hex: "#F87171") ?? .red }
+        static var success: Color { Color(hex: "#4ADE80") ?? .green }
+        static var warning: Color { Color(hex: "#FBBF24") ?? .orange }
+        static var info: Color { Color(hex: "#2080F0") ?? .blue }
+    }
+
+    /// 动效（Legado：--ease-standard = cubic-bezier(.16,1,.3,1)）
+    enum Motion {
+        /// 标准：expo-out，0.3s
+        static let standard = Animation.timingCurve(0.16, 1, 0.3, 1, duration: 0.3)
+        /// 快速：0.15s ease-out
+        static let fast = Animation.easeOut(duration: 0.15)
+    }
+
+    /// 卡片描边：浅色黑 6% / 深色白 10%（Legado：--color-border #ffffff1a）
+    static var stroke: Color { Color.primary.opacity(Theme.isDark ? 0.10 : 0.06) }
+
+    /// 选中态底色：强调色 15%（Legado：color-mix(accent 15%, transparent)）
+    static var activeFill: Color { Theme.accent.opacity(0.15) }
+
+    /// 徽章描边：强调色 35%（Legado：#63e2b759）
+    static var activeStroke: Color { Theme.accent.opacity(0.35) }
 
     /// 投影：深色主题更重（否则看不见）
     static var shadow: Color { Color.black.opacity(Theme.isDark ? 0.45 : 0.10) }
