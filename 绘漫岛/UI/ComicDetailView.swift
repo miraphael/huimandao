@@ -274,13 +274,15 @@ struct ComicDetailView: View {
 
     /// 「开始阅读 / 继续阅读」文案：有进度就叫继续，更符合直觉
     private var startReadingLabel: String {
-        guard let p = ComicRepository.shared.progress(noteUrl: noteUrl),
+        guard let info,
+              let p = ComicRepository.shared.progress(noteUrl: info.noteUrl),
               p.page > 0 || !p.chapterUrl.isEmpty else { return "开始阅读" }
         return "继续阅读"
     }
 
     /// 加入 / 移出书架（原逻辑抽出来，供宫格按钮复用）
     private func toggleShelf() {
+        guard let info else { return }
         if inShelf {
             ComicRepository.shared.removeFromShelf(noteUrl: info.noteUrl)
         } else {

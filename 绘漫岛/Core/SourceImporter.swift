@@ -4,9 +4,7 @@ import UIKit
 extension Notification.Name {
     /// 从外部打开文件导入后的结果（`String`）—— App 顶层用它弹提示。
     static let hmdImportResult = Notification.Name("hmdImportResult")
-    /// 图源列表发生变化（导入 / 删除 / 启停）—— 列表页据此**立即刷新**，
-    /// 不用杀掉 App 重开（用户反馈「导入后必须重启才看得到新源」）。
-    static let hmdSourcesChanged = Notification.Name("hmdSourcesChanged")
+    // ⚠️ `hmdSourcesChanged` 已定义在 `HMDApp.swift`（全 App 共用），这里不要再定义。
 }
 
 /// 「从文件导入图源」的统一入口。
