@@ -260,7 +260,8 @@ struct RecommendCell: View {
     let r: SearchResult
     var body: some View {
         HStack(spacing: 12) {
-            CoverImage(url: r.coverUrl)
+            // 🔴 必须带源站 Referer：`image.kalaimg.top` 这类图床**无 Referer 直接 403**
+            CoverImage(url: r.coverUrl, referer: r.origin)
                 .frame(width: 64, height: 88)
                 .hmdThumb()
             VStack(alignment: .leading, spacing: 6) {

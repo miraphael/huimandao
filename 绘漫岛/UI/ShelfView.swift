@@ -239,7 +239,7 @@ struct ShelfCell: View {
                 // 封面 + 底部渐隐信息条（把「读到第几话」压到图上，
                 // 省掉下面第二行文字，网格更干净）
                 ZStack(alignment: .bottomLeading) {
-                    CoverImage(url: item.coverUrl)
+                    CoverImage(url: item.coverUrl, referer: item.origin)
                         .frame(height: 140)
                     if !coverSubtitle.isEmpty {
                         LinearGradient(colors: [.clear, .black.opacity(0.62)],

@@ -653,7 +653,7 @@ struct SourceListView: View {
                         ForEach(recent) { it in
                             NavigationLink { ShelfContinueView(item: it) } label: {
                                 VStack(alignment: .leading, spacing: 5) {
-                                    CoverImage(url: it.coverUrl)
+                                    CoverImage(url: it.coverUrl, referer: it.origin)
                                         .frame(width: 66, height: 90)
                                         .hmdThumb()
                                     Text(it.name)

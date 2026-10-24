@@ -305,7 +305,7 @@ struct ResultCell: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            CoverImage(url: r.coverUrl)
+            CoverImage(url: r.coverUrl, referer: r.origin)
                 .frame(width: 60, height: 82)
                 .hmdThumb()
             VStack(alignment: .leading, spacing: 5) {

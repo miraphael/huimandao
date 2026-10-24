@@ -55,13 +55,17 @@ struct SettingsView: View {
             )
     }
 
-    /// 彩色图标块（iOS 设置那种圆角小方块）
+    /// 图标块 —— **统一用强调色浅底 + 强调色图标**。
+    ///
+    /// 原来是红/橙/绿/蓝/青/灰六种彩色渐变块，一屏看下来像调色板，很杂。
+    /// 统一成单色后，整页安静下来，也更「简洁精美」。
+    /// （`color` 参数保留，避免改所有调用点；实际不再使用。）
     private func tile(_ icon: String, _ color: Color, size: CGFloat = 30) -> some View {
         Image(systemName: icon)
             .font(.system(size: size * 0.46, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.accent)
             .frame(width: size, height: size)
-            .background(color.gradient,
+            .background(Theme.accent.opacity(0.12),
                         in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
     }
 
@@ -105,33 +109,62 @@ struct SettingsView: View {
 
     // MARK: - 各区块
 
-    /// 顶部概览卡：应用标识 + 版本 + 三个数字
+    /// 顶部卡：品牌 + 账号 + 统计（三合一，一块渐变）
     private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
+            // 品牌
+            HStack(spacing: 11) {
                 Text("绘")
-                    .font(.system(size: 22, weight: .black))
-                    .foregroundStyle(.white)
-                    .frame(width: 46, height: 46)
+                    .font(.system(size: 19, weight: .black))
+                    .frame(width: 40, height: 40)
                     .background(.white.opacity(0.18),
-                                in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
                     Text("绘漫岛")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.white)
+                        .font(.system(size: 19, weight: .bold, design: .rounded))
+                        .tracking(1.2)
                     Text("v\(Self.version) · build \(Self.buildNumber)")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.82))
+                        .font(.system(size: 11))
+                        .opacity(0.82)
                 }
                 Spacer(minLength: 0)
             }
+            .foregroundStyle(.white)
 
+            Rectangle().fill(.white.opacity(0.16)).frame(height: 1)
+
+            // 账号
+            NavigationLink { AccountView() } label: {
+                HStack(spacing: 10) {
+                    Text(acc.isRegistered ? acc.avatar : "👤")
+                        .font(.system(size: 19))
+                        .frame(width: 38, height: 38)
+                        .background(.white.opacity(0.20), in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.50), lineWidth: 1.2))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(acc.isRegistered ? acc.nickname : "未登录")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(acc.isRegistered ? "本地阅读档案" : "点此创建一个本地档案")
+                            .font(.system(size: 11))
+                            .opacity(0.82)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .opacity(0.72)
+                }
+                .foregroundStyle(.white)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // 统计
             HStack(spacing: 0) {
                 statCell("\(sourceCount)", "图源")
-                Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 26)
+                Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 24)
                 statCell("\(shelfCount)", "书架")
-                Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 26)
-                statCell("\(acc.streakDays)", "连续天数")
+                Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 24)
+                statCell("\(acc.streakDays)", "连续天")
             }
         }
         .padding(16)
@@ -153,57 +186,6 @@ struct SettingsView: View {
             Text(label).font(.caption2).foregroundStyle(.white.opacity(0.8))
         }
         .frame(maxWidth: .infinity)
-    }
-
-    /// 账号卡 —— 强调色渐变横幅（不再是「系统灰卡片 + 一行字」）
-    private var accountCard: some View {
-        NavigationLink { AccountView() } label: {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    Text(acc.isRegistered ? acc.avatar : "👤")
-                        .font(.system(size: 26))
-                        .frame(width: 54, height: 54)
-                        .background(.white.opacity(0.20), in: Circle())
-                        .overlay(Circle().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(acc.isRegistered ? acc.nickname : "未登录")
-                            .font(.system(size: 19, weight: .bold, design: .rounded))
-                        Text(acc.isRegistered ? "本地阅读档案" : "点此创建一个本地阅读档案")
-                            .font(.system(size: 12))
-                            .opacity(0.85)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .bold))
-                        .opacity(0.75)
-                }
-                if acc.isRegistered {
-                    HStack(spacing: 0) {
-                        statCell("\(acc.booksRead)", "书架")
-                        Rectangle().fill(.white.opacity(0.22))
-                            .frame(width: 1, height: 26)
-                        statCell("\(acc.chaptersRead)", "已读")
-                        Rectangle().fill(.white.opacity(0.22))
-                            .frame(width: 1, height: 26)
-                        statCell("\(acc.streakDays)", "连续天")
-                    }
-                }
-            }
-            .foregroundStyle(.white)
-            .padding(16)
-            .background(
-                LinearGradient(colors: [Theme.accent, Theme.accent.opacity(0.66)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing),
-                in: RoundedRectangle(cornerRadius: 20, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(.white.opacity(0.16), lineWidth: 1)
-            )
-            .shadow(color: Theme.accent.opacity(0.30), radius: 16, x: 0, y: 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     /// 「我的内容」四宫格
@@ -324,9 +306,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 18) {
+                    // 品牌 + 账号 + 统计合并成**一块**，避免两块渐变大卡叠在一起（视觉太重）
                     headerCard
-                    accountCard
 
                     groupTitle("我的内容")
                     contentGrid

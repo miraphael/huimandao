@@ -35,6 +35,13 @@ struct ComicDetailView: View {
     @StateObject private var session: DetailSession
     @State private var ascending = true
     @State private var inShelf = false
+    /// 三个去向用**独立布尔**驱动 `navigationDestination(isPresented:)`。
+    /// 🔴 不用 `NavigationLink { destination }`：开始阅读 / 下载 / 换源 是三个
+    ///    **同类型**的跳转，SwiftUI 会复用 destination —— 用户反馈
+    ///    「点开始阅读，进去却是下载模式」。加 `.id` 也压不住，改用显式布尔最稳。
+    @State private var navRead = false
+    @State private var navDownload = false
+    @State private var navSwitch = false
     /// 彩蛋主题「黑白纸」：封面转黑白、直角黑边、按钮墨色
     @EnvironmentObject private var themeStore: ThemeStore
 
@@ -91,21 +98,7 @@ struct ComicDetailView: View {
                     .padding(.horizontal)
 
                     // ── 主操作：开始阅读（整行主按钮，强调色）
-                    NavigationLink {
-                        // 「开始阅读」的去向：
-                        //   ① 有阅读进度 → 直接跳上次那一章那一页
-                        //   ② 只有一章 → 直接进阅读器（图集类站点一个相册就是一章）
-                        //   ③ 其余 → 进章节列表
-                        if let p = ComicRepository.shared.progress(noteUrl: info.noteUrl),
-                           p.page > 0 || !p.chapterUrl.isEmpty,
-                           let last = info.chapters.first(where: { $0.url == p.chapterUrl }) {
-                            ReaderView(info: info, startChapter: last, startPage: p.page)
-                        } else if info.chapters.count == 1, let only = info.chapters.first {
-                            ReaderView(info: info, startChapter: only)
-                        } else {
-                            ChapterListView(info: info, resumeProgress: resumeProgress)
-                        }
-                    } label: {
+                    Button { navRead = true } label: {
                         Label(startReadingLabel, systemImage: "book.fill")
                             .font(.system(size: 16, weight: .semibold))
                             .frame(maxWidth: .infinity)
@@ -114,10 +107,6 @@ struct ComicDetailView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
                     .disabled(info.chapters.isEmpty)
-                    // ⚠️ 和下面「下载」是两个**同类型**的 NavigationLink：
-                    //    不给稳定 id 时 SwiftUI 可能复用同一个 destination，
-                    //    表现就是「点开始阅读，进去却是下载模式」（用户反馈）。
-                    .id("hmd.startReading")
                     .padding(.horizontal)
 
                     // ── 次操作：三宫格（加入书架 / 下载 / 换源）
@@ -129,29 +118,16 @@ struct ComicDetailView: View {
                         }
                         .buttonStyle(.plain)
 
-                        NavigationLink {
-                            ChapterListView(info: info, resumeProgress: resumeProgress, downloadMode: true)
-                        } label: {
+                        Button { navDownload = true } label: {
                             actionTile("下载", icon: "arrow.down.circle.fill", active: false)
                         }
                         .buttonStyle(.plain)
                         .disabled(info.chapters.isEmpty)
-                        .id("hmd.download")
 
-                        NavigationLink {
-                            // ⚠️ 两个坑（都踩过，CI 实测报错）：
-                            //   ① 不要传 `id:` —— `SearchResult.id` 是**计算属性**
-                            //   ② **实参顺序必须与属性声明顺序一致**
-                            MultiSourceDetail(name: info.name, firstHit: SearchResult(
-                                name: info.name, author: info.author, coverUrl: info.coverUrl,
-                                lastChapter: info.lastChapter, noteUrl: info.noteUrl,
-                                origin: info.origin, originName: info.origin,
-                                noteHeaders: noteHeaders))
-                        } label: {
+                        Button { navSwitch = true } label: {
                             actionTile("换源", icon: "arrow.left.arrow.right.circle.fill", active: false)
                         }
                         .buttonStyle(.plain)
-                        .id("hmd.switchSource")
                     }
                     .padding(.horizontal)
 
@@ -228,6 +204,23 @@ struct ComicDetailView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        // ── 三个去向：用显式布尔驱动，避免 NavigationLink 复用 destination ──
+        .navigationDestination(isPresented: $navRead) { readDestination }
+        .navigationDestination(isPresented: $navDownload) {
+            if let info {
+                ChapterListView(info: info, resumeProgress: resumeProgress, downloadMode: true)
+            }
+        }
+        .navigationDestination(isPresented: $navSwitch) {
+            if let info {
+                // ⚠️ `SearchResult` 的 memberwise init **实参顺序必须与属性声明一致**
+                MultiSourceDetail(name: info.name, firstHit: SearchResult(
+                    name: info.name, author: info.author, coverUrl: info.coverUrl,
+                    lastChapter: info.lastChapter, noteUrl: info.noteUrl,
+                    origin: info.origin, originName: info.origin,
+                    noteHeaders: noteHeaders))
+            }
+        }
         .task {
             // 详情页两阶段加载由 DetailSession 编排：首屏结果先发布，完整章节在后台补全。
             // 这样 View 只绑定状态，不再自行持有两个异步请求及其竞态逻辑。
@@ -236,6 +229,22 @@ struct ComicDetailView: View {
             // 续读位置只查一次（见 `resumeProgress` 的说明）——
             // 不能在每行的 `resumePage` 里现查，否则 300 章 = 300 次同步查库。
             refreshResumeProgress()
+        }
+    }
+
+    /// 「开始阅读」的去向：① 有进度 → 续读；② 只有一章 → 直接进阅读器；③ 其余 → 章节列表
+    @ViewBuilder
+    private var readDestination: some View {
+        if let info {
+            if let p = ComicRepository.shared.progress(noteUrl: info.noteUrl),
+               p.page > 0 || !p.chapterUrl.isEmpty,
+               let last = info.chapters.first(where: { $0.url == p.chapterUrl }) {
+                ReaderView(info: info, startChapter: last, startPage: p.page)
+            } else if info.chapters.count == 1, let only = info.chapters.first {
+                ReaderView(info: info, startChapter: only)
+            } else {
+                ChapterListView(info: info, resumeProgress: resumeProgress)
+            }
         }
     }
 
@@ -351,7 +360,9 @@ struct ChapterListView: View {
     private var isManga: Bool { themeStore.currentID == ThemeStore.mangaThemeID }
 
     var body: some View {
-        List(info.chapters.reversed(), selection: $selection) { ch in
+        // 🔴 必须跟随 `ascending`：原来这里**永远 reversed**，
+        //    「正序/倒序」按钮是个假开关（点了没反应）。
+        List(ordered(info.chapters), selection: $selection) { ch in
             NavigationLink {
                 ReaderView(info: info, startChapter: ch,
                            startPage: ResumeLocator.page(for: ch, info: info, progress: resumeProgress))
@@ -452,7 +463,11 @@ struct ChapterListView: View {
     }
 
     private func enqueue() {
-        let items = info.chapters.filter { selection.contains($0.url) }
+        // 🔴 下载顺序必须是「第 1 话 → 最后一话」。
+        //    原来直接用 `info.chapters` 的顺序：有些源给的是**倒序**（最新在前），
+        //    于是队列从最后一话开始下（用户反馈「下载的是倒序的」）。
+        //    这里统一走 `ChapterSorter`（按话数升序），认不出编号时保持原顺序。
+        let items = ChapterSorter.sort(info.chapters.filter { selection.contains($0.url) })
         var added = 0
         for ch in items {
             // 已下载的跳过（DownloadManager.addTask 内部也会挡一次）
