@@ -3,7 +3,8 @@ import SwiftUI
 /// 设置子页 —— 阅读
 ///
 /// 从原「设置」长 Form 拆出（ARCHITECTURE §8.6）。只放与**阅读本身**有关的项：
-/// 阅读模式、白边裁剪、双击缩放、常亮、进度保存，以及漫画页顶部分段显示。
+/// 白边裁剪、章节排序、双击缩放、常亮、进度保存，以及漫画台分段显示。
+/// （「阅读模式」选项已移除 —— 只保留滚动模式。）
 /// ⚠️ 搜索线程 / 下载线程**不放在这里** —— 它们属于「网络」「下载与追更」。
 struct ReaderSettingsView: View {
     @EnvironmentObject var s: AppSettings
@@ -11,10 +12,8 @@ struct ReaderSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("默认阅读模式", selection: $s.readMode) {
-                    Text("滚动").tag(1); Text("普通翻页").tag(2); Text("日漫模式").tag(3)
-                    Text("双页").tag(4); Text("双页·日漫").tag(5)
-                }
+                // 🔴 「默认阅读模式」已删除（2026-10-24 用户要求：只保留滚动模式）。
+                //    现在全 App 只有「滚动（条漫）」一种阅读方式，`readMode` 恒为 1。
                 Toggle("白边裁剪", isOn: $s.whiteEdgeCut)
                 // 章节智能排序（2026-10-18）：按话数升序重排，解决倒序站点
                 // ① 列表反着排 ② 「下一章」往回走 两个问题。

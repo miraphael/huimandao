@@ -1170,15 +1170,8 @@ struct ReaderView: View {
 
                     settingsCard("阅读", icon: "book.fill") {
                         settingsToggle("白边裁剪", icon: "scissors", isOn: $s.whiteEdgeCut)
-                        settingsDivider
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("点击方向", systemImage: "arrow.left.arrow.right")
-                            Picker("点击方向", selection: $s.tapZones) {
-                                Text("左=上一页").tag("prev,menu,next")
-                                Text("左=下一页").tag("next,menu,prev")
-                            }
-                            .pickerStyle(.segmented)
-                        }
+                        // 「点击方向」已移除：滚动模式下点击只负责呼出/收起菜单，
+                        // 左/右分区不再翻页（2026-10-24 只保留滚动模式后无意义）。
                     }
 
                     settingsCard("章节", icon: "list.bullet") {

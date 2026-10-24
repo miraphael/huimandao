@@ -225,7 +225,7 @@ struct SettingsView: View {
     private var settingsCard: some View {
         card {
             VStack(spacing: 0) {
-                navRow("阅读", detail: "阅读模式 · 白边裁剪 · 缩放 · 进度",
+                navRow("阅读", detail: "白边裁剪 · 缩放 · 进度",
                        icon: "book.fill", color: .orange) { ReaderSettingsView() }
                 hairline
                 navRow("图源", detail: "导入 / 管理 / 校验图源规则",
