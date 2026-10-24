@@ -29,45 +29,13 @@ struct ReaderSettingsView: View {
             } footer: {
                 Text("阅读到哪一页会自动记住，下次打开直接续读；此功能不提供关闭选项。")
             }
-            Section {
-                // 🔴 这两个开关控制的是**「漫画台」标签页**的分段，不是「漫画」标签页
-                //    （旧文案写成「漫画标签页」，真机反馈 2026-10-15：用户按说明去关「推荐」，
-                //      结果把「漫画台」关得只剩「图源」，以为 App 坏了）。
-                // 🔴 而且不能两个都关：全关掉后「漫画台」只剩「图源」一个分段，
-                //    看起来就像"漫画台变成了图源界面"。这里用自定义 Binding 拦住
-                //    「关掉最后一个」的操作，保证至少留一个分段。
-                Toggle("推荐", isOn: recommendBinding)
-                Toggle("发现", isOn: findBinding)
-            } header: {
-                Label("漫画台显示", systemImage: "rectangle.3.group")
-            } footer: {
-                Text("控制「漫画台」标签页里顶部有哪几个分段（图源始终显示，且至少要留一个分段）。")
-            }
+            // 🔴 「漫画台显示」整节已删除（2026-10-24）：
+            //    漫画台只剩「图源」一个分段，推荐/发现已下线，
+            //    再留着这两个开关就是**假开关**（拨了毫无反应）。
         }
         .transparentScrollBackground()
         .navigationTitle("阅读")
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    // MARK: - 「漫画台」分段的开关绑定
-
-    /// 「推荐」开关：**当「发现」已经是关的时候，不允许再关掉推荐** ——
-    /// 否则「漫画台」会只剩「图源」，用户会以为界面坏了。
-    private var recommendBinding: Binding<Bool> {
-        Binding(get: { s.showRecommend },
-                set: { v in
-                    if !v && !s.showFind { return }   // 会全关 → 忽略这次操作
-                    s.showRecommend = v
-                })
-    }
-
-    /// 「发现」开关：同理，当「推荐」已经是关的时候不允许再关掉发现。
-    private var findBinding: Binding<Bool> {
-        Binding(get: { s.showFind },
-                set: { v in
-                    if !v && !s.showRecommend { return }
-                    s.showFind = v
-                })
-    }
 }
-
