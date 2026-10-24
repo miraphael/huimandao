@@ -1133,119 +1133,205 @@ struct ReaderView: View {
     ///    换成固定宽度的 `Form` 面板后布局完全可控，控件也更好点。
     private var readerSettingsSheet: some View {
         NavigationStack {
-            Form {
-                Section("屏幕") {
-                    Toggle(isOn: $s.eyeCare) { Label("护眼", systemImage: "eyeglasses") }
-                    Toggle(isOn: $s.keepScreenOn) { Label("常亮", systemImage: "sun.max") }
-                    HStack {
-                        Label("亮度", systemImage: "circle.lefthalf.filled")
-                        Slider(value: $s.brightness, in: 0...1)
-                    }
-                    Text("1.0 = 原样；往左只变暗。**不再做「提亮」** —— 白色蒙层会让整屏发白、发雾（2026-10-24 用户反馈「朦胧」）。")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                // ── 章节导航 ──
-                // 滚动模式下「下一章」按钮在内容最底部，翻到中间想换章要一直滑到底；
-                // 翻页模式更是只能靠"翻到本章最后一页"触发。这里给一个**随时可达**的入口。
-                Section {
-                    // 章节列表（第三个入口：浮层 ☰ / 点标题 / 点章节数小框 / 这里）
-                    Button {
-                        showSettings = false
-                        // ⚠️ 先关设置再开列表：同一个 runloop 里「关一个 sheet + 开另一个」
-                        //    在 iOS 上会互相打架（新 sheet 弹不出来），必须错开一拍。
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 350_000_000)
-                            showChapterList = true
+            ScrollView {
+                VStack(spacing: 20) {
+                    settingsCard("显示", icon: "sun.max.fill") {
+                        settingsToggle("护眼", icon: "eyeglasses", isOn: $s.eyeCare)
+                        settingsDivider
+                        settingsToggle("常亮", icon: "sun.max", isOn: $s.keepScreenOn)
+                        settingsDivider
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 8) {
+                                Label("亮度", systemImage: "sun.max")
+                                Spacer()
+                                Text("\(Int(s.brightness * 100))%")
+                                    .font(.caption.monospacedDigit().weight(.semibold))
+                                    .padding(.horizontal, 9).padding(.vertical, 3)
+                                    .background(Color.white.opacity(0.09), in: Capsule())
+                            }
+                            HStack(spacing: 10) {
+                                Image(systemName: "sun.min")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                                Slider(value: $s.brightness, in: 0...1)
+                                    .tint(Theme.accent)
+                                Image(systemName: "sun.max.fill")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 8) {
+                                brightnessChip("夜间", 0.35)
+                                brightnessChip("适中", 0.60)
+                                brightnessChip("明亮", 0.85)
+                                brightnessChip("原样", 1.00)
+                            }
+                            Text("100% = 原样；只变暗、不提亮")
+                                .font(.caption2).foregroundStyle(.tertiary)
                         }
-                    } label: {
-                        Label("章节列表（\(info.chapters.count) 章）", systemImage: "list.bullet")
                     }
-                    Button {
-                        showSettings = false
-                        Task { await loadChapter(chapterIndex - 1) }
-                    } label: {
-                        Label("上一章", systemImage: "chevron.left")
+
+                    settingsCard("阅读", icon: "book.fill") {
+                        settingsToggle("白边裁剪", icon: "scissors", isOn: $s.whiteEdgeCut)
+                        settingsDivider
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("点击方向", systemImage: "arrow.left.arrow.right")
+                            Picker("点击方向", selection: $s.tapZones) {
+                                Text("左=上一页").tag("prev,menu,next")
+                                Text("左=下一页").tag("next,menu,prev")
+                            }
+                            .pickerStyle(.segmented)
+                        }
                     }
-                    .disabled(chapterIndex <= 0)
-                    Button {
-                        showSettings = false
-                        Task { await loadChapter(chapterIndex + 1) }
-                    } label: {
-                        Label("下一章", systemImage: "chevron.right")
+
+                    settingsCard("章节", icon: "list.bullet") {
+                        Text("第 \(chapterIndex + 1) / \(info.chapters.count) 章 · \(chapter?.name ?? "")")
+                            .font(.caption).foregroundStyle(.secondary)
+                        settingsDivider
+                        settingsRow("章节列表", icon: "list.bullet", detail: "\(info.chapters.count) 章") {
+                            showSettings = false
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 350_000_000)
+                                showChapterList = true
+                            }
+                        }
+                        settingsDivider
+                        HStack(spacing: 10) {
+                            settingsAction("上一章", icon: "chevron.left", enabled: chapterIndex > 0) {
+                                showSettings = false
+                                Task { await loadChapter(chapterIndex - 1) }
+                            }
+                            settingsAction("下一章", icon: "chevron.right",
+                                           enabled: chapterIndex + 1 < info.chapters.count) {
+                                showSettings = false
+                                Task { await loadChapter(chapterIndex + 1) }
+                            }
+                        }
                     }
-                    .disabled(chapterIndex + 1 >= info.chapters.count)
-                } header: {
-                    Text("章节")
-                } footer: {
-                    Text("第 \(chapterIndex + 1) / \(info.chapters.count) 章 · \(chapter?.name ?? "")")
-                        .font(.caption2)
+
+                    settingsCard("诊断", icon: "ladybug.fill") {
+                        settingsRow("导出当前界面截图", icon: "camera", detail: nil) {
+                            exportDiagnosticScreenshot()
+                        }
+                        settingsDivider
+                        settingsRow("复现：下滑后缩小", icon: "ladybug", detail: nil) {
+                            runDiagRepro()
+                        }
+                        if !diagMessage.isEmpty {
+                            Text(diagMessage)
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                Section {
-                    Toggle(isOn: $s.whiteEdgeCut) { Label("白边裁剪", systemImage: "scissors") }
-                    Button {
-                        s.tapZones = (s.tapZones == "next,menu,prev") ? "prev,menu,next" : "next,menu,prev"
-                    } label: {
-                        // ⚠️ 不要把三元表达式塞进字符串插值里（引号会互相打架，
-                        //    `probe/brace2.py` 抓过同类语法错误），单独提成计算属性。
-                        Label(tapZoneLabel, systemImage: "arrow.left.arrow.right")
-                    }
-                }
-                Section {
-                    Button {
-                        ComicRepository.shared.updateProgress(noteUrl: info.noteUrl,
-                                                              chapterUrl: chapter?.url ?? "",
-                                                              chapterName: chapter?.name ?? "",
-                                                              page: page)
-                    } label: { Label("保存进度", systemImage: "bookmark") }
-                }
-                Section {
-                    Label("双指捏合（以两指中点为中心）或双击（在点击处）放大 1x~6x；放大后拖动可平移、双击还原",
-                          systemImage: "arrow.up.left.and.arrow.down.right")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section {
-                    Label("放大后左右滑动被禁用（避免误翻页）；退出放大（双击或缩回 1x）即可继续翻页。",
-                          systemImage: "hand.draw")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section {
-                    Button { exportDiagnosticScreenshot() } label: {
-                        Label("导出当前界面截图", systemImage: "camera")
-                    }
-                    Button { runDiagRepro() } label: {
-                        Label("复现：下滑后缩小", systemImage: "ladybug")
-                    }
-                    if !diagMessage.isEmpty {
-                        Text(diagMessage).font(.caption2).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("诊断")
-                } footer: {
-                    Text("截图存成 PNG。复现会**自动**跳页 → 滚动 → 缩小 → 还原，并把每一步的 offset / zoom / 可见页 / 渲染窗口写进 diag_result.txt —— 用来定位黑屏与跳页。")
-                        .font(.caption2)
-                }
+                .padding(16)
             }
-            .transparentScrollBackground()
+            .background(Color(white: 0.06).ignoresSafeArea())
             .navigationTitle("阅读设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { showSettings = false }
+                        .fontWeight(.semibold)
                 }
             }
         }
         .onChange(of: s.keepScreenOn) { v in UIApplication.shared.isIdleTimerDisabled = v }
         .onChange(of: s.readMode) { v in
             ComicRepository.shared.execShelfReadMode(noteUrl: info.noteUrl, mode: v)
-            // 🔴 切换翻页模式必须**迁移页码坐标** —— 三种模式各用各的状态：
-            //    滚动用 `stripRestorePage`、单页用 `page`、双页用 `spread`（= page/2）。
-            //    以前这里只写库不迁移，导致「翻页→双页」跳回第 0 屏、
-            //    「滚动→翻页→滚动」直接回到顶部（用户看着就是「进度丢了」）。
-            //    （由智能体「阅器」发现）
             spread = page / 2
             stripRestorePage = page
-            resetFlip()          // 清掉上一模式遗留的缩放/平移
+            resetFlip()
         }
+    }
+
+    // MARK: - 设置页的卡片组件
+
+    /// 一张设置卡片：小标题 + 圆角内容块
+    private func settingsCard<C: View>(_ title: String, icon: String,
+                                       @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.caption2)
+                Text(title).font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.leading, 4)
+
+            VStack(alignment: .leading, spacing: 12) { content() }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(white: 0.12),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                )
+        }
+    }
+
+    /// 亮度快捷档位（选中态高亮）
+    private func brightnessChip(_ title: String, _ value: Double) -> some View {
+        let on = abs(s.brightness - value) < 0.02
+        return Button {
+            s.brightness = value
+        } label: {
+            Text(title)
+                .font(.caption.weight(on ? .semibold : .regular))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(on ? Theme.accent.opacity(0.22) : Color.white.opacity(0.07),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(on ? Theme.accent.opacity(0.55) : Color.clear, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(on ? Theme.accent : Color.primary)
+    }
+
+    private var settingsDivider: some View {
+        Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+    }
+
+    private func settingsToggle(_ title: String, icon: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) { Label(title, systemImage: icon) }
+            .tint(Theme.accent)
+    }
+
+    /// 一行可点条目（右侧箭头）
+    private func settingsRow(_ title: String, icon: String, detail: String?,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Label(title, systemImage: icon)
+                Spacer()
+                if let detail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+    }
+
+    /// 半宽按钮（上一章 / 下一章）
+    private func settingsAction(_ title: String, icon: String, enabled: Bool,
+                                action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.caption.weight(.semibold))
+                Text(title).font(.subheadline.weight(.medium))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(enabled ? 0.10 : 0.04),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(enabled ? .primary : .tertiary)
+        .disabled(!enabled)
     }
 
     private var tapZoneLabel: String {
