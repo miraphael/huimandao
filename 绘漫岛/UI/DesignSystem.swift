@@ -11,12 +11,12 @@ enum HMD {
 
     /// 圆角
     enum R {
-        /// 封面缩略图
-        static let thumb: CGFloat = 12
+        /// 封面缩略图（Legado 用 6px，取 8 兼顾圆角观感）
+        static let thumb: CGFloat = 8
         /// 普通卡片
-        static let card: CGFloat = 16
+        static let card: CGFloat = 12
         /// 大面板 / 弹层
-        static let panel: CGFloat = 22
+        static let panel: CGFloat = 16
         /// 胶囊
         static let pill: CGFloat = 999
     }

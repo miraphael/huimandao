@@ -159,13 +159,13 @@ struct ThemeConfig: Codable, Equatable, Identifiable {
 extension ThemeConfig {
     static let builtins: [ThemeConfig] = [
         ThemeConfig(id: "builtin.light", name: "明亮", isDark: false,
-                    accentHex: "#FF6B9D", backgroundHex: "#FFFFFF",
-                    surfaceHex: "#F5F5F7", textHex: "#1C1C1E",
+                    accentHex: "#18A058", backgroundHex: "#FAFAFA",
+                    surfaceHex: "#FFFFFF", textHex: "#18181B",
                     backgroundImage: nil, backgroundOpacity: 1, backgroundFill: "fill",
                     builtin: true),
         ThemeConfig(id: "builtin.dark", name: "深色", isDark: true,
-                    accentHex: "#FF6B9D", backgroundHex: "#101014",
-                    surfaceHex: "#1C1C22", textHex: "#F2F2F7",
+                    accentHex: "#63E2B7", backgroundHex: "#18181B",
+                    surfaceHex: "#27272A", textHex: "#FAFAFA",
                     backgroundImage: nil, backgroundOpacity: 1, backgroundFill: "fill",
                     builtin: true),
         ThemeConfig(id: "builtin.oled", name: "纯黑 OLED", isDark: true,

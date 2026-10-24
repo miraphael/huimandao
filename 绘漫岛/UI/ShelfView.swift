@@ -236,11 +236,12 @@ struct ShelfCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topTrailing) {
-                // 封面 + 底部渐隐信息条（把「读到第几话」压到图上，
-                // 省掉下面第二行文字，网格更干净）
+                // 封面 + 底部渐隐信息条（借鉴 Legado：**封面固定 3:4**，
+                // 网格行高一致，不会因为封面比例不同而参差不齐）
                 ZStack(alignment: .bottomLeading) {
                     CoverImage(url: item.coverUrl, referer: item.origin)
-                        .frame(height: 140)
+                        .frame(maxWidth: .infinity)
+                        .aspectRatio(3 / 4, contentMode: .fit)
                     if !coverSubtitle.isEmpty {
                         LinearGradient(colors: [.clear, .black.opacity(0.62)],
                                        startPoint: .top, endPoint: .bottom)
@@ -254,17 +255,17 @@ struct ShelfCell: View {
                             .padding(.bottom, 5)
                     }
                 }
-                // 统一封面语言：12pt 圆角 + 细描边 + 轻投影（见 `HMD.hmdThumb`）
+                // 小圆角 + 细描边（Legado 封面 6px，这里取 8）
                 .hmdThumb()
                 if item.hasUpdate {
-                    // 显示「N 章」而不是一个红点 —— 用户能一眼看出更新了几话，
-                    // 而不是点进去才知道。数量拿不到时退化成「更新」。
+                    // Legado 徽章样式：黑 50% + blur(4px)，10pt semibold，小圆角
                     Text(item.newChapterCount > 0 ? "\(item.newChapterCount)章" : "更新")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4).padding(.vertical, 2)
-                        .background(.red, in: Capsule())
-                        .padding(4)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 4))
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4))
+                        .padding(6)
                 }
             }
             Text(item.name)
