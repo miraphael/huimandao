@@ -365,10 +365,12 @@ struct SourceListView: View {
         reload()
     }
 
-    /// 选中后的操作条（Legado 的 selectActionBar）：主操作删除，其余进 ⋮
+    /// 选中后的操作条 —— **悬浮胶囊卡**：
+    /// 🔴 原来是贴底的 `.bar` 条，会跟外壳底栏叠在一起被遮挡；
+    ///    现在浮在列表上方，留出底部间距避开底栏。
     private var selectBar: some View {
-        HStack(spacing: 10) {
-            barButton("全选（\(selected.count)/\(selectableCount)）",
+        HStack(spacing: 8) {
+            barButton("全选 \(selected.count)/\(selectableCount)",
                       systemImage: selectAllChecked ? "checkmark.square.fill" : "square",
                       action: selectAll)
             barButton("反选", systemImage: "arrow.triangle.2.circlepath", action: invertSelection)
@@ -376,8 +378,15 @@ struct SourceListView: View {
             barButton("删除", systemImage: "trash", destructive: true) { pendingMultiDelete = true }
             selectMenu
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(.bar)
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(HMD.stroke, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.16), radius: 12, x: 0, y: 4)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
     }
 
     /// 底部条的描边按钮（Legado 那种细线圆角框）
@@ -386,14 +395,14 @@ struct SourceListView: View {
                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: systemImage).font(.caption)
-                Text(title).font(.callout)
+                Image(systemName: systemImage).font(.system(size: 11, weight: .semibold))
+                Text(title).font(.system(size: 13, weight: .medium))
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
-            .foregroundStyle(destructive ? Color.red : (tint ?? Color.primary))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke((destructive ? Color.red.opacity(0.45) : Color.primary.opacity(0.22)), lineWidth: 1)
+            .foregroundStyle(destructive ? HMD.Semantic.error : (tint ?? Theme.text.opacity(0.8)))
+            .background(
+                destructive ? HMD.Semantic.error.opacity(0.10) : Color.primary.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
         }
         .buttonStyle(.plain)
@@ -506,6 +515,18 @@ struct SourceListView: View {
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
+    /// 能力小标签（Legado `.src-card__cap`）：支持的源亮、不支持的灰
+    private func capChip(_ label: String, on: Bool) -> some View {
+        Text(label)
+            .font(.system(size: 10, weight: on ? .semibold : .regular))
+            .foregroundStyle(on ? Theme.accent : Theme.text.opacity(0.38))
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(
+                on ? Theme.accent.opacity(0.12) : Color.primary.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 3)
+            )
+    }
+
     /// 行的两行文字（拆出来单独类型检查，避免整行表达式过大）
     @ViewBuilder
     private func sourceInfo(_ s: ComicSource) -> some View {
@@ -527,17 +548,17 @@ struct SourceListView: View {
                 }
                 healthBadge(s)
             }
+            Text(subtitle(s))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(Theme.text.opacity(0.45))
+                .lineLimit(1)
+            // 能力 chips（Legado `.src-card__chips`）：一眼看出这个源支持什么
             HStack(spacing: 4) {
-                // 「发现」状态：绿=启用、红=禁用（原来是一个独立按钮，太占地方）
                 if !(s.ruleFindUrl ?? "").isEmpty {
-                    Circle()
-                        .fill(s.isExploreEnabled ? Color.green : Color.red)
-                        .frame(width: 5, height: 5)
+                    capChip("发现", on: s.isExploreEnabled)
                 }
-                Text(subtitle(s))
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Theme.text.opacity(0.45))
-                    .lineLimit(1)
+                if !(s.ruleSearchUrl ?? "").isEmpty { capChip("搜索", on: true) }
+                if !(s.ruleContentUrl ?? "").isEmpty { capChip("正文", on: true) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

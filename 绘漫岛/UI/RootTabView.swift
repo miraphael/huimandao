@@ -92,16 +92,7 @@ struct ComicTabView: View {
                             selection: $tab)
                         .frame(width: 180)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    // ⚠️ 用 `NavigationLink` **push** 而不是 `.sheet`（用户要求
-                    //    「搜索打开应该是一个独立的界面」）。push 进当前 NavigationStack，
-                    //    有自己的导航栏、支持边缘滑动返回，与「书架 / 下载」同层级。
-                    //    `embedded: true` 是因为 SearchView 自带 NavigationStack，
-                    //    不再嵌一层才不会出现双层导航栏。
-                    NavigationLink { SearchView(embedded: true) } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
-                }
+                // 「搜索」已有独立 Tab（AppShellView），书架工具栏不再放放大镜
             }
         }
     }
