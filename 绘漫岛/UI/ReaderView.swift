@@ -1134,11 +1134,6 @@ struct ReaderView: View {
     private var readerSettingsSheet: some View {
         NavigationStack {
             Form {
-                Section("阅读模式") {
-                    Label("滚动（条漫）", systemImage: "scroll")
-                    Text("图片按屏幕宽度自适应、上下连续滚动 —— 不裁边、不留黑边。其他模式（翻页 / 日漫 / 双页）已移除。")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
                 Section("屏幕") {
                     Toggle(isOn: $s.eyeCare) { Label("护眼", systemImage: "eyeglasses") }
                     Toggle(isOn: $s.keepScreenOn) { Label("常亮", systemImage: "sun.max") }
