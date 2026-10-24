@@ -114,7 +114,9 @@ struct SourceListView: View {
                     }
                     .environment(\.editMode, $editMode)
                     .transparentScrollBackground()
-                    .listStyle(.insetGrouped)
+                    .listStyle(.plain)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 }
             }
             .navigationTitle("图源")
@@ -436,13 +438,16 @@ struct SourceListView: View {
     private func sourceRow(_ s: ComicSource) -> some View {
         let key = keyOf(s)
         let isSel = selected.contains(key)
-        HStack(spacing: 6) {
+        // 🔴 对齐 Legado `.src-card`：左侧 3px 状态条（停用=红）、
+        //    名称粗体 + 徽章、URL 弱化、能力 chips、操作按钮一行
+        HStack(alignment: .top, spacing: 10) {
             // 名称 + 勾选框合并成一个控件
             Button { toggleSelect(key) } label: {
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     Image(systemName: isSel ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 19))
-                        .foregroundStyle(isSel ? Color.accentColor : Color.secondary)
+                        .font(.system(size: 17))
+                        .foregroundStyle(isSel ? Color.accentColor : Theme.text.opacity(0.3))
+                        .padding(.top, 2)
                     sourceInfo(s)
                 }
                 .contentShape(Rectangle())
@@ -478,10 +483,27 @@ struct SourceListView: View {
                 Divider()
                 Button(role: .destructive) { pendingDelete = s } label: { Label("删除", systemImage: "trash") }
             } label: {
-                Image(systemName: "ellipsis").foregroundStyle(.secondary)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.text.opacity(0.45))
             }
             .buttonStyle(.plain)
         }
+        // 🔴 对齐 Legado `.src-card`：surface-raised 底 + 1px border + radius-sm(6)
+        //    + **左侧 3px 状态条**（启用=透明 / 停用=danger）
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(HMD.stroke, lineWidth: 1)
+        )
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(s.isEnabled ? Color.clear : HMD.Semantic.error)
+                .frame(width: 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     /// 行的两行文字（拆出来单独类型检查，避免整行表达式过大）
@@ -489,14 +511,19 @@ struct SourceListView: View {
     private func sourceInfo(_ s: ComicSource) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                // 🔴 源名用**强调色 + 圆体粗字**（Legado：`.source-name{color:accent;
-                //    font-weight:600}`，它还是等宽 12px —— 名字在这里更醒目更合适）
+                // 🔴 Legado `.src-card__name`：text-primary、600、0.8rem
                 Text(displayName(s))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .lineLimit(1)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(2)
                 if !s.isEnabled {
-                    Text("已停用").font(.caption2).foregroundStyle(.secondary)
+                    // `.src-card__badge--off`：danger-subtle 底 + danger 字
+                    Text("已停用")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(HMD.Semantic.error)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(HMD.Semantic.error.opacity(0.12),
+                                    in: RoundedRectangle(cornerRadius: 3))
                 }
                 healthBadge(s)
             }
