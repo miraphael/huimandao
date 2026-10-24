@@ -214,7 +214,14 @@ struct ReaderView: View {
             // 🔴 章节列表的 sheet 挂在**浮层**上，而不是和 `showSettings` 挂在同一个视图上。
             //    同一个视图挂两个 `.sheet` 在部分 iOS 版本下会互相抢占，
             //    表现就是「点了没反应」（用户反馈「看不到所有章目录」）。
-            .sheet(isPresented: $showChapterList) { chapterListSheet }
+            // 🔴 阅读器子树被强制 `.colorScheme(.dark)`（阅读区要黑底白字），
+            //    弹出来的 sheet 会**继承**这个环境 → 整个设置/章节面板是黑的，
+            //    用户反馈「阅读设置是黑色的，很影响观看」。
+            //    这里显式按**主题**给 sheet 自己的 colorScheme。
+            .sheet(isPresented: $showChapterList) {
+                chapterListSheet
+                    .environment(\.colorScheme, Theme.isDark ? .dark : .light)
+            }
         }
         .overlay { Color.black.opacity(s.eyeCare ? 0.25 : 0).allowsHitTesting(false) }
         // 🔴 亮度**不再挂在根视图**上（2026-10-23 用户反馈「翻页每翻一页黑一下」）。
@@ -269,7 +276,11 @@ struct ReaderView: View {
             saveProgress()
             store?.flushRatios()
         }
-        .sheet(isPresented: $showSettings) { readerSettingsSheet }
+        .sheet(isPresented: $showSettings) {
+            readerSettingsSheet
+                // 同上：不要让阅读器的深色环境把设置面板染黑
+                .environment(\.colorScheme, Theme.isDark ? .dark : .light)
+        }
         .toolbar(.hidden, for: .tabBar)
         // 阅读器恒定深色 → 导航栏也用深色配色，标题/按钮才看得见。
         // ⚠️ 故意**不用** `.preferredColorScheme(.dark)`：那会改整个 window 的深浅色，
@@ -342,9 +353,17 @@ struct ReaderView: View {
                 .accessibilityLabel("阅读设置")
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.black.opacity(0.62))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            // 悬浮圆角条 + 毛玻璃：比原来的「一整条纯黑」轻，也更像成品
+            .background(.ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(.white.opacity(0.12), lineWidth: 0.8)
+            )
+            .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 4)
+            .padding(.horizontal, 12)
 
             // 章节数小框（离线角标 + 页码 + 第 X/Y 章）
             // **点一下直接开章节列表** —— 用户直觉就是点这里换章，
@@ -362,9 +381,9 @@ struct ReaderView: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white.opacity(0.65))
                 }
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(Color.black.opacity(0.45))
-                .clipShape(Capsule())
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+                .overlay(Capsule(style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 0.8))
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .trailing)

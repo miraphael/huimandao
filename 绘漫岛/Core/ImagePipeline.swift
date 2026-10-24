@@ -196,6 +196,15 @@ enum HMDImagePipeline {
             req.setValue(cu, forHTTPHeaderField: "User-Agent")
         }
 
+        // 🔴 **兜底 User-Agent**（2026-10-24 用户反馈「漫画台很多封面不显示」）：
+        //    很多图床（如 `image4.wmanhua.com`）对**没有 UA** 的请求直接 403。
+        //    `CoverImage` 只在能按域名反查到图源时才带 UA/Referer，独立图床反查不到
+        //    → 裸请求 → 403 → 封面空白。
+        //    这里统一兜底成浏览器 UA（源自己指定的 UA 优先级更高，不会被覆盖）。
+        if req.value(forHTTPHeaderField: "User-Agent") == nil {
+            req.setValue(AppSettings.shared.httpUA, forHTTPHeaderField: "User-Agent")
+        }
+
         var imageReq = ImageRequest(urlRequest: req)
         // ⚠️ `ImageRequest` **没有** `userAgent` 属性（写过会报
         //    "value of type 'ImageRequest' has no member 'userAgent'"）。
