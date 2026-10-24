@@ -97,14 +97,9 @@ struct SettingsView: View {
         Divider().padding(.leading, 56)
     }
 
-    /// 分组标题
+    /// 分组标题（统一走组件层）
     private func groupTitle(_ text: String) -> some View {
-        Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .textCase(.uppercase)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 4)
+        HMDSectionHeader(text: text)
     }
 
     // MARK: - 各区块

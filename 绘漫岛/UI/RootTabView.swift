@@ -87,13 +87,10 @@ struct ComicTabView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Picker("", selection: $tab) {
-                        ForEach(visibleTabs, id: \.id) { t in
-                            Text(t.title).tag(t.id)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: CGFloat(visibleTabs.count) * 90)
+                    // 下划线式页签（组件层 HMDTabs）：比系统 segmented 更轻
+                    HMDTabs(items: visibleTabs.map { (id: $0.id, title: $0.title) },
+                            selection: $tab)
+                        .frame(width: 180)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     // ⚠️ 用 `NavigationLink` **push** 而不是 `.sheet`（用户要求
