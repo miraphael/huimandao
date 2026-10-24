@@ -58,6 +58,24 @@ struct AboutView: View {
                     .lineSpacing(4)
             }
 
+            // ── 费用说明（Legado 同款：「没有收费功能」）──
+            Section {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(HMD.Semantic.success)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("没有收费功能")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.text)
+                        Text("本应用所有功能完全免费开放，永无付费项目。")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
             // ── 入口 ──
             Section {
                 NavigationLink {

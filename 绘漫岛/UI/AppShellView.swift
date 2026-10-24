@@ -69,9 +69,11 @@ struct AppShellView: View {
     private func pageView(_ p: ShellPage) -> some View {
         switch p {
         case .comics: ComicTabView()
-        case .explore: FindView()
+        // 发现 = 老漫画台的「选源 → 栏目 → 内容列表」（RecommendView）
+        case .explore: RecommendView()
         case .search: SearchView()
-        case .sources: ConsoleTabView()
+        // 图源 = 纯图源管理（导入/导出/校验/启停，全部功能集中在这）
+        case .sources: SourceListView()
         case .extensions: extensionsPage
         case .settings: SettingsView()
         }

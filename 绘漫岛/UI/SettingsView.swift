@@ -41,6 +41,7 @@ struct SettingsView: View {
     /// 图源数 / 书架数 —— 一次读库，避免每次重绘都查
     @State private var sourceCount = 0
     @State private var shelfCount = 0
+    @State private var readCount = 0
 
     // MARK: - 卡片与图标
 
@@ -128,38 +129,13 @@ struct SettingsView: View {
 
             Rectangle().fill(.white.opacity(0.16)).frame(height: 1)
 
-            // 账号
-            NavigationLink { AccountView() } label: {
-                HStack(spacing: 10) {
-                    Text(acc.isRegistered ? acc.avatar : "👤")
-                        .font(.system(size: 19))
-                        .frame(width: 38, height: 38)
-                        .background(.white.opacity(0.20), in: Circle())
-                        .overlay(Circle().strokeBorder(.white.opacity(0.50), lineWidth: 1.2))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(acc.isRegistered ? acc.nickname : "未登录")
-                            .font(.system(size: 15, weight: .semibold))
-                        Text(acc.isRegistered ? "本地阅读档案" : "点此创建一个本地档案")
-                            .font(.system(size: 11))
-                            .opacity(0.82)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
-                        .opacity(0.72)
-                }
-                .foregroundStyle(.white)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            // 统计
+            // 统计（🔴 账号行已删：用户反馈「估计没用」）
             HStack(spacing: 0) {
                 statCell("\(sourceCount)", "图源")
                 Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 24)
                 statCell("\(shelfCount)", "书架")
                 Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 24)
-                statCell("\(acc.streakDays)", "连续天")
+                statCell("\(readCount)", "在读")
             }
         }
         .padding(16)
@@ -332,8 +308,10 @@ struct SettingsView: View {
                 var a = AccountStore.load()
                 if a.isRegistered { AccountStore.refreshStats(into: &a) }
                 acc = a
+                let shelf = ComicRepository.shared.shelfList()
                 sourceCount = ComicRepository.shared.allSources().count
-                shelfCount = ComicRepository.shared.shelfList().count
+                shelfCount = shelf.count
+                readCount = shelf.filter { !$0.durChapterUrl.isEmpty }.count
             }
             .onReceive(NotificationCenter.default.publisher(for: .hmdAccountChanged)) { _ in
                 acc = AccountStore.load()

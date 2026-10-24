@@ -634,7 +634,6 @@ struct SourceListView: View {
     /// 列表内容：按域名分组 / 平铺（拆成独立子视图，避免类型检查超时）
     @ViewBuilder
     private var listContent: some View {
-        continueSection
         if groupByHost {
             groupedRows
         } else {
