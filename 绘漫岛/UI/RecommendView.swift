@@ -100,6 +100,9 @@ struct RecommendView: View {
                         } label: {
                             RecommendCell(r: r)
                         }
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                     }
                     if !items.isEmpty {
                         HStack {
@@ -255,15 +258,31 @@ struct RecommendCell: View {
     let r: SearchResult
     var body: some View {
         HStack(spacing: 12) {
-            CoverImage(url: r.coverUrl).frame(width: 60, height: 82).clipShape(RoundedRectangle(cornerRadius: 6))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(r.name).font(.body).lineLimit(1)
-                Text(r.originName).font(.caption).foregroundStyle(.secondary)
+            CoverImage(url: r.coverUrl)
+                .frame(width: 64, height: 88)
+                .hmdThumb()
+            VStack(alignment: .leading, spacing: 6) {
+                Text(r.name)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                // 来源做成强调色小胶囊 —— 一眼区分「这本书来自哪个源」
+                Text(r.originName)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Theme.accent.opacity(0.13), in: Capsule())
+                    .lineLimit(1)
                 if !r.lastChapter.isEmpty {
-                    Text(r.lastChapter).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(r.lastChapter)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text.opacity(0.45))
+                        .lineLimit(1)
                 }
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
+        .padding(10)
+        .hmdRowCard()
     }
 }

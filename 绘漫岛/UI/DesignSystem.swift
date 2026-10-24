@@ -52,6 +52,17 @@ extension View {
             .shadow(color: HMD.shadow, radius: 10, x: 0, y: 4)
     }
 
+    /// 列表「行卡片」：半透明底 + 细描边，**不带投影**（列表里几十行，投影会拖慢滚动）
+    func hmdRowCard(radius: CGFloat = 14) -> some View {
+        self
+            .background(Theme.surface.opacity(0.55),
+                        in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .strokeBorder(HMD.stroke, lineWidth: 0.8)
+            )
+    }
+
     /// 封面缩略图：圆角 + 细描边 + 轻投影（书架 / 搜索结果 / 详情共用）
     func hmdThumb(radius: CGFloat = HMD.R.thumb) -> some View {
         self

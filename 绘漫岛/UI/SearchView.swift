@@ -304,14 +304,28 @@ struct ResultCell: View {
     private var isJS: Bool { r.isJSSource }
 
     var body: some View {
-        HStack(spacing: 10) {
-            CoverImage(url: r.coverUrl).frame(width: 52, height: 72).clipShape(RoundedRectangle(cornerRadius: 6))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(r.name).font(.body).lineLimit(1)
-                if !r.author.isEmpty { Text(r.author).font(.caption).foregroundStyle(.secondary) }
-                if !r.kind.isEmpty { Text(r.kind).font(.caption2).foregroundStyle(.tint).lineLimit(1) }
+        HStack(spacing: 12) {
+            CoverImage(url: r.coverUrl)
+                .frame(width: 60, height: 82)
+                .hmdThumb()
+            VStack(alignment: .leading, spacing: 5) {
+                Text(r.name)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                if !r.author.isEmpty {
+                    Text(r.author).font(.system(size: 12))
+                        .foregroundStyle(Theme.text.opacity(0.45)).lineLimit(1)
+                }
+                if !r.kind.isEmpty {
+                    Text(r.kind).font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Theme.accent.opacity(0.13), in: Capsule())
+                        .lineLimit(1)
+                }
                 HStack(spacing: 4) {
-                    Text("来源: \(sourceLabel)").font(.caption2).foregroundStyle(.secondary)
+                    Text(sourceLabel).font(.system(size: 11)).foregroundStyle(Theme.text.opacity(0.45))
                     // JS 源与 JSON 规则源的行为差异较大（脚本可能死循环、需显式信任），
                     // 打个标让用户知道「这条来自 JS 源」，出问题时能对号入座。
                     if isJS {
@@ -323,8 +337,10 @@ struct ResultCell: View {
                     }
                 }
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
+        .padding(10)
+        .hmdRowCard()
     }
 }
 
@@ -347,11 +363,30 @@ struct FindView: View {
             NavigationLink {
                 FindColumnView(column: col)
             } label: {
-                VStack(alignment: .leading) {
-                    Text(col.title)
-                    Text(col.originName).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    // 栏目图标：强调色浅底方块（统一「行卡片」的左视觉锚点）
+                    Image(systemName: "square.grid.2x2.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 34, height: 34)
+                        .background(Theme.accent.opacity(0.13),
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(col.title)
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(Theme.text)
+                        Text(col.originName)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text.opacity(0.45))
+                    }
+                    Spacer(minLength: 0)
                 }
+                .padding(10)
+                .hmdRowCard()
             }
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
         }
         .navigationTitle("发现")
         .onAppear { columns = ComicEngine.shared.findColumns() }
@@ -369,6 +404,9 @@ struct FindColumnView: View {
             NavigationLink {
                 ComicDetailView(noteUrl: r.noteUrl, origin: r.origin)
             } label: { ResultCell(r: r) }
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
         }
         .listStyle(.plain)
         .navigationTitle(column.title)
