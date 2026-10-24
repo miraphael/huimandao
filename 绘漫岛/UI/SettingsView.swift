@@ -47,12 +47,13 @@ struct SettingsView: View {
 
     /// 白色圆角卡片（深浅色都跟着系统走）
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        // 对齐 Legado：surface 底 + 1px border + 小圆角（radius-2 = 12px）
         content()
-            .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Theme.surface,
+                        in: RoundedRectangle(cornerRadius: HMD.R.card, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                RoundedRectangle(cornerRadius: HMD.R.card, style: .continuous)
+                    .strokeBorder(HMD.stroke, lineWidth: 1)
             )
     }
 
@@ -98,9 +99,15 @@ struct SettingsView: View {
         Divider().padding(.leading, 56)
     }
 
-    /// 分组标题（统一走组件层）
+    /// 分组标题（对齐 Legado `.setting-section__title`：15pt 粗体 + 底部分隔线）
     private func groupTitle(_ text: String) -> some View {
-        HMDSectionHeader(text: text)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Theme.text)
+            Rectangle().fill(HMD.stroke).frame(height: 1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - 各区块
@@ -197,9 +204,6 @@ struct SettingsView: View {
             VStack(spacing: 0) {
                 navRow("阅读", detail: "白边裁剪 · 缩放 · 进度",
                        icon: "book.fill", color: .orange) { ReaderSettingsView() }
-                hairline
-                navRow("图源", detail: "导入 / 管理 / 校验图源规则",
-                       icon: "square.stack.3d.up.fill", color: .red) { SourceSettingsView() }
                 hairline
                 navRow("下载与追更", detail: "下载线程 · 自动检查更新",
                        icon: "arrow.down.circle.fill", color: .green) { DownloadFollowSettingsView() }
@@ -301,7 +305,15 @@ struct SettingsView: View {
                 .padding(.bottom, 32)
             }
             // 主题背景铺在本页这一层（与两个 tab 一致）
-            .background(ThemeBackground(theme: themeStore.current))
+            .background(
+                ZStack {
+                    ThemeBackground(theme: themeStore.current)
+                    // Legado `.settings-view--mobile`：右上角强调色 8% 径向渐变
+                    RadialGradient(colors: [Theme.accent.opacity(0.08), .clear],
+                                   center: .topTrailing, startRadius: 0, endRadius: 420)
+                        .ignoresSafeArea()
+                }
+            )
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {

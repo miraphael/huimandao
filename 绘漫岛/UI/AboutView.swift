@@ -23,6 +23,11 @@ struct AboutView: View {
             // ── 品牌 ──
             Section {
                 VStack(spacing: 12) {
+                    // Legado `.about-hero__eyebrow`：大写强调色小标签
+                    Text("HUIDAO ISLAND")
+                        .font(.system(size: 12, weight: .bold))
+                        .tracking(2.2)
+                        .foregroundStyle(Theme.accent)
                     Image("AppIcon")
                         .resizable().scaledToFill()
                         .frame(width: 84, height: 84)
@@ -90,16 +95,11 @@ struct AboutView: View {
                 }
             }
 
-            // ── 数据 ──
+            // ── 数据（Legado `.about-badge-row`：标签左 · 值右 · 分隔线）──
             Section {
-                HStack(spacing: 0) {
-                    stat("\(sourceCount)", "图源")
-                    divider
-                    stat("\(shelfCount)", "书架")
-                    divider
-                    stat("\(readCount)", "已读")
-                }
-                .padding(.vertical, 4)
+                badgeRow("图源", "\(sourceCount) 个")
+                badgeRow("书架", "\(shelfCount) 本")
+                badgeRow("在读", "\(readCount) 本")
             }
 
             // ── 声明 ──
@@ -122,20 +122,19 @@ struct AboutView: View {
         }
     }
 
-    private func stat(_ value: String, _ label: String) -> some View {
-        VStack(spacing: 3) {
-            Text(value)
-                .font(.system(size: 17, weight: .bold, design: .rounded))
-                .foregroundStyle(Theme.text)
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+    /// Legado `.about-badge-row`：标签左 · 值右 · 底部分隔线
+    private func badgeRow(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(label).font(.system(size: 13)).foregroundStyle(Theme.text.opacity(0.6))
+                Spacer()
+                Text(value)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+            }
+            .padding(.vertical, 9)
+            Rectangle().fill(HMD.stroke).frame(height: 0.8)
         }
-        .frame(maxWidth: .infinity)
-    }
-
-    private var divider: some View {
-        Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 1, height: 24)
     }
 }
 
