@@ -7,9 +7,7 @@ final class AppSettings: ObservableObject {
     private init() {
         loadThreadCounts()
         Self.migrateWebDAVPasswordToKeychain()
-        Self.migrateTapZonesToRightNext()
         Self.migrateReaderNoDarkVeil()
-        Self.migratePageScaleMode()
         Self.migrateScrollOnlyMode()
     }
 
@@ -28,22 +26,6 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// 迁移：旧的 Bool `fillScreen` → 新的三档 `pageScaleMode`。
-    ///
-    /// 用户反馈「关掉铺满后每页都留黑边，不像滚动模式」，所以 `false` 映射到
-    /// **适应宽度(0)**（而不是「完整」），默认也是 0。
-    private static func migratePageScaleMode() {
-        let flag = "pageScaleMode.v1"
-        let ud = UserDefaults.standard
-        guard !ud.bool(forKey: flag) else { return }
-        ud.set(true, forKey: flag)
-        if ud.object(forKey: "fillScreen") != nil {
-            let fill = ud.bool(forKey: "fillScreen")
-            ud.set(fill ? 1 : 0, forKey: "pageScaleMode")
-            DiagLog.event("reader", "scale",
-                          "页面缩放迁移：fillScreen=\(fill) → pageScaleMode=\(fill ? 1 : 0)")
-        }
-    }
 
     /// 迁移：去掉阅读器那层「黑幕」（2026-10-23 用户明确要求）。
     ///
@@ -61,21 +43,6 @@ final class AppSettings: ObservableObject {
         DiagLog.event("reader", "veil", "已关闭护眼 + 亮度归位 0.5（去除黑色蒙层）")
     }
 
-    /// 迁移：老版本默认「点**左**侧 = 下一页」，2026-10-23 用户要求改成
-    /// 「点**右**侧 = 下一页」（更符合直觉，也和其他漫画 App 一致）。
-    ///
-    /// 只把**仍是旧默认值**的设置翻过来；用户自己改过的保持不动。
-    /// 用一次性标记，避免用户之后又手动改回左翻页时被再次翻转。
-    private static func migrateTapZonesToRightNext() {
-        let flag = "tapZones.rightNext.v1"
-        let ud = UserDefaults.standard
-        guard !ud.bool(forKey: flag) else { return }
-        ud.set(true, forKey: flag)
-        if ud.string(forKey: "tapZones") == "next,menu,prev" {
-            ud.set("prev,menu,next", forKey: "tapZones")
-            DiagLog.event("reader", "tapZones", "默认点击方向改为「右侧=下一页」")
-        }
-    }
 
     /// 迁移：历史版本把 WebDAV 密码**明文**存在 `UserDefaults("webdavPass")`。
     /// 搬进 Keychain，并把 UserDefaults 里那份**删掉**。
@@ -127,32 +94,12 @@ final class AppSettings: ObservableObject {
     /// 阅读模式：**现在只支持 1 = 滚动（条漫）**。
     /// 2/3/4/5（翻页/日漫/双页）已停用并隐藏（2026-10-24 用户要求）。
     @AppStorage("readMode") var readMode = 1
-    /// 翻页 / 双页模式的显示方式。
-    ///   · `true`（默认）= **铺满屏幕**：按屏幕比例放大，裁掉溢出的边缘 —— 画面填满、无黑边
-    ///   · `false`      = **整页完整**：整页缩进屏内，不裁切（上下/左右会留黑）
-    /// 用户 2026-10-17 明确要「无论什么屏幕都填满」，所以默认取 `true`。
-    /// 页面缩放（仅翻页 / 双页模式）：
-    ///   0 = **适应宽度**（默认）—— 宽度铺满屏幕、高度按比例，超出屏幕的部分裁掉。
-    ///       和滚动模式的观感一致，不会左右留黑边。
-    ///   1 = 铺满 —— `scaledToFill`，裁掉溢出边缘，无黑边（宽图会裁得比较多）。
-    ///   2 = 完整 —— `scaledToFit`，整页显示，会留黑边。
-    ///
-    /// ⚠️ 旧版是 Bool `fillScreen`（true=铺满 / false=完整）。用户反馈
-    ///    「翻页模式每页大小不对、不如滚动模式贴合屏幕」，所以补了「适应宽度」这一档
-    ///    并作为默认；旧值在 `migratePageScaleMode()` 里换算。
-    @AppStorage("pageScaleMode") var pageScaleMode = 0
     @AppStorage("whiteEdgeCut") var whiteEdgeCut = true
     @AppStorage("keepScreenOn") var keepScreenOn = false
     @AppStorage("eyeCare") var eyeCare = false
     @AppStorage("brightness") var brightness = 0.5
     @AppStorage("doubleTapZoom") var doubleTapZoom = true
-    @AppStorage("tapZones") var tapZones = "prev,menu,next"   // 三分区动作（右=下一页）
 
-    /// 翻页效果：
-    ///   0 = **按屏翻页**（默认）—— 连续长条 + 整屏吸附。图片接着排、一屏排满，
-    ///       填满屏幕不留黑边，观感与滚动模式一致（用户 2026-10-23 选定）。
-    ///   1 = **纸质卷页** —— `UIPageViewController(.pageCurl)`，一页一张图，可能留黑边。
-    @AppStorage("pageTurnStyle") var pageTurnStyle = 0
 
     // 并发
     @AppStorage("searchThreads") var searchThreads = 32
