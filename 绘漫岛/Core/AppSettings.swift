@@ -10,6 +10,22 @@ final class AppSettings: ObservableObject {
         Self.migrateTapZonesToRightNext()
         Self.migrateReaderNoDarkVeil()
         Self.migratePageScaleMode()
+        Self.migrateScrollOnlyMode()
+    }
+
+    /// 迁移：**只保留滚动模式**（2026-10-24 用户要求）。
+    ///
+    /// 翻页 / 日漫 / 双页 / 双页日漫 的界面入口已删除；
+    /// 这里把老用户的 `readMode` 强制归到 1（滚动），避免停在已隐藏的模式上。
+    private static func migrateScrollOnlyMode() {
+        let flag = "reader.scrollOnly.v1"
+        let ud = UserDefaults.standard
+        guard !ud.bool(forKey: flag) else { return }
+        ud.set(true, forKey: flag)
+        if ud.integer(forKey: "readMode") != 1 {
+            ud.set(1, forKey: "readMode")
+            DiagLog.event("reader", "mode", "只保留滚动模式：readMode 归 1")
+        }
     }
 
     /// 迁移：旧的 Bool `fillScreen` → 新的三档 `pageScaleMode`。
@@ -108,7 +124,9 @@ final class AppSettings: ObservableObject {
     //    （由智能体「界面」「设置」分别发现）
 
     // 阅读器
-    @AppStorage("readMode") var readMode = 1            // 1滚动 2翻页 3日漫 4双页 5双页日漫
+    /// 阅读模式：**现在只支持 1 = 滚动（条漫）**。
+    /// 2/3/4/5（翻页/日漫/双页）已停用并隐藏（2026-10-24 用户要求）。
+    @AppStorage("readMode") var readMode = 1
     /// 翻页 / 双页模式的显示方式。
     ///   · `true`（默认）= **铺满屏幕**：按屏幕比例放大，裁掉溢出的边缘 —— 画面填满、无黑边
     ///   · `false`      = **整页完整**：整页缩进屏内，不裁切（上下/左右会留黑）

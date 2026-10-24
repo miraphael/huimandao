@@ -121,17 +121,17 @@ struct ReaderView: View {
     ///    （挂根视图会让 `TabView` 翻页时整屏黑一帧）。
     @AppStorage("brightness") private var brightnessValue = 0.5
     private var brightnessDelta: Double { Double(brightnessValue - 0.5) * 0.6 }
-    /// 变暗蒙层的浓度（0…0.65）。滚动模式与 `StoreImage` 共用同一套映射。
+    /// 变暗蒙层的浓度（0…0.65）。
+    ///
+    /// 🔴 **只做「变暗」，不做「提亮」**（2026-10-24）：
+    ///    提亮是用白色蒙层叠上去的，会把整屏糊成一层白雾 ——
+    ///    用户看到的就是「图片有一层朦胧的感觉」。亮度 1.0 = 完全原样。
     private var dimOpacity: Double {
-        brightnessDelta < 0 ? min(0.65, -brightnessDelta * 1.7) : 0
+        max(0, min(0.65, (1 - brightnessValue) * 0.6))
     }
-    /// 提亮蒙层的浓度（0…0.22）。
-    private var brightOpacity: Double {
-        brightnessDelta > 0 ? min(0.22, brightnessDelta * 0.7) : 0
-    }
-    /// 给 UIKit 页面用的蒙层颜色（纸质翻页模式）
+    /// 给 UIKit 页面用的蒙层颜色（纸质翻页模式已停用，保留以兼容）
     private var dimColor: UIColor { UIColor.black.withAlphaComponent(dimOpacity) }
-    private var brightColor: UIColor { UIColor.white.withAlphaComponent(brightOpacity) }
+    private var brightColor: UIColor { .clear }
 
     var body: some View {
         Group {
@@ -171,7 +171,6 @@ struct ReaderView: View {
                 //    改用普通半透明蒙层：清晰、无滤镜、无额外合成。
                 webtoonPager()
                     .overlay(Color.black.opacity(dimOpacity).allowsHitTesting(false))
-                    .overlay(Color.white.opacity(brightOpacity).allowsHitTesting(false))
                     .ignoresSafeArea()
             } else if s.readMode == 4 || s.readMode == 5 {
                 spreadPager.ignoresSafeArea()
@@ -1136,30 +1135,8 @@ struct ReaderView: View {
         NavigationStack {
             Form {
                 Section("阅读模式") {
-                    Picker("翻页方式", selection: $s.readMode) {
-                        Text("滚动").tag(1)
-                        Text("翻页").tag(2)
-                        Text("日漫").tag(3)
-                        Text("双页").tag(4)
-                        Text("双页日漫").tag(5)
-                    }
-                    .pickerStyle(.segmented)
-                    Text("双页 = 一屏两页（左→右）；双页日漫 = 右→左，适合日漫。")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    Picker("页面缩放", selection: $s.pageScaleMode) {
-                        Text("适应宽度").tag(0)
-                        Text("铺满").tag(1)
-                        Text("完整").tag(2)
-                    }
-                    .pickerStyle(.segmented)
-                    Text("适应宽度（默认）：宽铺满屏幕、高按比例，超出屏幕的部分裁掉 —— 和滚动模式观感一致。铺满：裁掉边缘、无黑边。完整：整页显示、会留黑边。仅影响翻页 / 双页模式。")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    Picker("翻页效果", selection: $s.pageTurnStyle) {
-                        Text("按屏翻页").tag(0)
-                        Text("纸质卷页").tag(1)
-                    }
-                    .pickerStyle(.segmented)
-                    Text("按屏翻页（默认）：图片连续排布、滑一次正好一屏，**填满屏幕不留黑边**；纸质卷页：一页一张图 + 卷页动画，可能留黑边。仅影响翻页 / 日漫模式。")
+                    Label("滚动（条漫）", systemImage: "scroll")
+                    Text("图片按屏幕宽度自适应、上下连续滚动 —— 不裁边、不留黑边。其他模式（翻页 / 日漫 / 双页）已移除。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Section("屏幕") {
@@ -1169,6 +1146,8 @@ struct ReaderView: View {
                         Label("亮度", systemImage: "circle.lefthalf.filled")
                         Slider(value: $s.brightness, in: 0...1)
                     }
+                    Text("1.0 = 原样；往左只变暗。**不再做「提亮」** —— 白色蒙层会让整屏发白、发雾（2026-10-24 用户反馈「朦胧」）。")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 // ── 章节导航 ──
                 // 滚动模式下「下一章」按钮在内容最底部，翻到中间想换章要一直滑到底；
@@ -1532,8 +1511,9 @@ struct ReaderView: View {
 struct StoreImage: View {
     @ObservedObject var store: ChapterImageStore
     let index: Int
-    /// 页面缩放：0 适应宽度 / 1 铺满 / 2 完整（见 `AppSettings.pageScaleMode`）
-    var mode = 0
+    /// 页面缩放：0 适应宽度 / 1 铺满 / 2 完整。
+    /// 滚动长条里槽高 = 宽 × 比例，`scaledToFit` 正好铺满，且没有 GeometryReader 开销。
+    var mode = 2
     /// 亮度偏移（由阅读器设置传入）。0 = 原样。
     /// ⚠️ 必须作用在**这张图**上，不能挂到外层 `TabView` —— 色彩滤镜包住翻页容器
     ///    会导致每次翻页黑一帧（2026-10-23 用户反馈「每翻一页黑一下」）。
