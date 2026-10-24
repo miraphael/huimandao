@@ -113,15 +113,24 @@ struct HMDSheet<Content: View>: View {
 }
 
 /// 只有顶部两个圆角的矩形（iOS 16.0 兼容写法）
-struct TopRoundedShape: Shape {
+/// ⚠️ 实现 `InsettableShape` 才能用 `.strokeBorder`（系统只给 RoundedRectangle 等内置了）。
+struct TopRoundedShape: Shape, InsettableShape {
     var radius: CGFloat
+    var insetAmount: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: insetAmount, dy: insetAmount)
         let p = UIBezierPath(
-            roundedRect: rect,
+            roundedRect: r,
             byRoundingCorners: [.topLeft, .topRight],
             cornerRadii: CGSize(width: radius, height: radius))
         return Path(p.cgPath)
+    }
+
+    func inset(by amount: CGFloat) -> TopRoundedShape {
+        var s = self
+        s.insetAmount += amount
+        return s
     }
 }
 
