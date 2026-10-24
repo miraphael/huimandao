@@ -161,13 +161,11 @@ struct ConsoleTabView: View {
                 ToolbarItem(placement: .principal) {
                     // 绑定到 `effectiveTab`：用户关掉某分段后 `tab` 可能指向已隐藏的分段，
                     // 直接绑 `$tab` 会让分段控件「没有选中项」。读走 effectiveTab、写回 tab。
-                    Picker("", selection: Binding(get: { effectiveTab }, set: { tab = $0 })) {
-                        ForEach(visibleTabs, id: \.id) { t in
-                            Text(t.title).tag(t.id)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: CGFloat(visibleTabs.count) * 78)
+                    // 自绘胶囊分段（替代系统 segmented —— 更贴合「我们」的圆润风格）
+                    HMDPillPicker(
+                        items: visibleTabs.map { (id: $0.id, title: $0.title) },
+                        selection: Binding(get: { effectiveTab }, set: { tab = $0 })
+                    )
                 }
             }
         }

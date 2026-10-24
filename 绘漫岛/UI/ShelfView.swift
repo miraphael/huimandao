@@ -234,11 +234,12 @@ struct ShelfCell: View {
     /// 整张书架列表（父视图统一读取一次）——预取邻居时用，避免每 cell 全表重查。
     var all: [ShelfItem] = []
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topTrailing) {
                 CoverImage(url: item.coverUrl)
                     .frame(height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    // 统一封面语言：12pt 圆角 + 细描边 + 轻投影（见 `HMD.hmdThumb`）
+                    .hmdThumb()
                 if item.hasUpdate {
                     // 显示「N 章」而不是一个红点 —— 用户能一眼看出更新了几话，
                     // 而不是点进去才知道。数量拿不到时退化成「更新」。
@@ -250,9 +251,14 @@ struct ShelfCell: View {
                         .padding(4)
                 }
             }
-            Text(item.name).font(.caption).lineLimit(1)
+            Text(item.name)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
             Text(item.durChapterName.isEmpty ? item.lastChapterName : "读到:\(item.durChapterName)")
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text.opacity(0.45))
+                .lineLimit(1)
         }
         // 书架是**网格**——一屏可能十几本书。`LazyVGrid` 只创建可视区内 + 少量缓冲的 cell，
         // 用户快速滑动时会看到一片灰底转圈。
