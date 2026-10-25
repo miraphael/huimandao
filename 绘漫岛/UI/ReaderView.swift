@@ -714,11 +714,8 @@ struct ReaderView: View {
                         }
                     }
 
-                    settingsCard("阅读", icon: "book.fill") {
-                        settingsToggle("白边裁剪", icon: "scissors", isOn: $s.whiteEdgeCut)
-                        // 「点击方向」已移除：滚动模式下点击只负责呼出/收起菜单，
-                        // 左/右分区不再翻页（2026-10-24 只保留滚动模式后无意义）。
-                    }
+                    // 「阅读」卡已删（H2）：白边裁剪是全局行为 → 设置页；
+                    // 这里只留「本次阅读」的 comfort 项（护眼/亮度/常亮）+ 章节导航 + 诊断。
 
                     settingsCard("章节", icon: "list.bullet") {
                         Text("第 \(chapterIndex + 1) / \(info.chapters.count) 章 · \(chapter?.name ?? "")")

@@ -138,6 +138,13 @@ struct RecommendView: View {
                         NavigationStack { SourceLoginView(source: src) }
                     }
                 }
+                // 🔴 登录 sheet 关闭后**立即重载栏目** —— 令牌已进 CookieStore，
+                //    不重载的话用户以为登录没用（要手动下拉刷新才能看到内容）。
+                .onChange(of: showLogin) { open in
+                    if !open, selectedSource != nil {
+                        Task { await load(page: 1) }
+                    }
+                }
                 .overlay {
                     if loading && items.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
                     if !loading && items.isEmpty && !columns.isEmpty {
