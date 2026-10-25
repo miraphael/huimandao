@@ -22,7 +22,6 @@ struct ReaderView: View {
 
     @State private var zoomed = false
     @State private var showSettings = false
-    /// 是否正处于一次捏合中（只在第一帧冻结锚点，避免中途漂移）
     @State private var showMenu = false
     /// 章节列表（选章）面板 —— 阅读中想换章时随时可达。
     @State private var showChapterList = false
@@ -152,6 +151,7 @@ struct ReaderView: View {
             }
         }
         // ⚠️ 关键：首次进入必须主动加载当前章。
+        // 此前只有「下一章 / 翻页到底 / nextPage / prevPage」四个调用点，
         // 初始进入时 @State loading=true 且 store=nil → 永远停在「加载中…」。
         .task { await loadChapter(chapterIndex) }
         // 阅读器背景**恒定深色**（不跟随 App 主题 —— 见 `zoomed` 上方的说明）。
@@ -199,6 +199,14 @@ struct ReaderView: View {
         // 🔴 亮度**不再挂在根视图**上（2026-10-23 用户反馈「翻页每翻一页黑一下」）。
         //
         //    原因：`.brightness()` 是**色彩滤镜**，SwiftUI 会把它做成离屏合成层。
+        //    根视图里包着 `TabView(.page)`（底层 UIPageViewController），翻页时
+        //    整层滤镜要跟着重新合成 → 过渡的那一帧渲染不出来 → **整屏黑一下**。
+        //    每翻一页都黑一次，正是这个滤镜造成的。
+        //
+        //    现在改为**只作用在每张漫画图上**（见 `StoreImage(brightness:)`）：
+        //    滤镜跟着静态的 Image 层走，不参与翻页滚动，既不会黑帧，
+        //    亮度语义也仍然保留（0.5 = 原样，1 = 更亮，0 = 更暗）。
+        //    滚动模式单独在 `webtoonPager` 上应用（见 body 里的调用）。
         // 🔴 强制阅读器**子树**为深色（只作用子树，不动整个 window，所以进出阅读器不会闪）。
         //    不这么做的话，浅色主题下两处会「漏光」：
         //      ① 错误态 `EmptyState` 用 `.secondary/.tertiary`，在浅色方案下解析成深灰，
@@ -552,6 +560,114 @@ struct ReaderView: View {
         }
         .frame(maxWidth: .infinity)
     }
+
+
+    /// 订阅 `store` 的变化 —— 图片加载完会学到**真实宽高比**，
+    /// 而每页高度（宽 × 比例）是内容总高与滚动定位的依据，必须据此重算。
+    ///
+    /// ⚠️ 不订阅的后果：`updateUIView` → `refresh` 不会被触发 →
+    /// 交给 `UIScrollView` 的 `contentSize`（内容总高）停留在旧值 ——
+    /// 滚动条位置、续读定位、缩放比例全都会漂。
+    /// （内容视图自己也观察 store，所以**行高**会更新；但 `contentSize` 只有
+    ///   `refresh` 会改，这一步必须由这里触发。）
+    private func observeStore(_ st: ChapterImageStore) {
+        storeObserver = st.objectWillChange
+            // ⚠️ 必须节流：预载会**连续**加载十几张，每张都发一次 objectWillChange。
+            //    原来直接 `storeTick += 1`，等于每加载一张就把整个阅读器 body 重算一次；
+            //    翻页模式下 `TabView` 被反复重建 → 用户看到的「翻页一闪一闪」。
+            //    120ms 合并一次，滚动模式照样能及时 refresh，翻页模式不再抖。
+            .throttle(for: .milliseconds(120), scheduler: RunLoop.main, latest: true)
+            .sink { _ in
+                // 只有**滚动长条**需要 storeTick 去驱动 `ZoomableStripView.refresh()`
+                // （重算每页高度 / contentSize）：
+                //   · 滚动模式（readMode == 1）
+                //   · **按屏翻页**（pageTurnStyle == 0，翻页模式也用长条渲染）
+                guard s.readMode == 1 else { return }
+                storeTick &+= 1
+            }
+    }
+
+    /// 诊断用：把**当前屏幕**截一张图存进 App 的 Documents。
+    ///
+    /// 为什么需要它：本机拿不到 iOS 的 RSD 隧道（iOS 17.2 没有 `CoreDeviceProxy`，
+    /// Windows 侧又没有 Bonjour/NCM 网卡），`pymobiledevice3 developer screenshot`
+    /// 走不通；而「缩放割裂 / 加载割裂」这类**视觉问题**只靠读代码极易误判。
+    /// 让 App 自己截屏，是目前唯一能拿到真实画面的通道：
+    /// 之后用 `pymobiledevice3 apps pull <bundle> Documents/diag_xxx.png .` 取出即可。
+    private func exportDiagnosticScreenshot() {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let win = scenes.flatMap({ $0.windows }).first(where: { $0.isKeyWindow })
+                ?? scenes.first?.windows.first else {
+            diagMessage = "找不到窗口"
+            return
+        }
+        let fmt = UIGraphicsImageRendererFormat.default()
+        fmt.scale = min(UIScreen.main.scale, 2)      // 2x 足够看清，文件又不大
+        let img = UIGraphicsImageRenderer(bounds: win.bounds, format: fmt).image { _ in
+            win.drawHierarchy(in: win.bounds, afterScreenUpdates: true)
+        }
+        guard let data = img.pngData() else { diagMessage = "截图编码失败"; return }
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let name = "diag_\(Int(Date().timeIntervalSince1970)).png"
+        do {
+            try data.write(to: dir.appendingPathComponent(name))
+            diagMessage = "已保存 \(name)（\(data.count / 1024) KB）"
+            DiagLog.event("diag", "screenshot", name)
+        } catch {
+            diagMessage = "写入失败: \(error.localizedDescription)"
+        }
+    }
+
+    /// 自动化复现「**下滑之后缩小 → 黑屏 / 跳页**」。
+    ///
+    /// ## 为什么需要它
+    /// 本机拿不到 iOS 的 UI 控制通道（免 root 的 RSD 隧道要 **iOS 17.4+**，
+    /// 而设备是 **17.2.1**），所以此前只能靠用户手动操作 + 录屏：
+    /// 慢、每轮要人配合、而且无法保证每次都做同一串动作。
+    ///
+    /// 这个序列把复现条件**固化**下来（顶部缩小不复现，必须离开顶部）：
+    ///   ① 跳到第 30 页（离开顶部）
+    ///   ② 再滚动 +600
+    ///   ③ 缩到 **0.75**（`< minimumZoomScale`，即弹性回弹区间 —— 旧守卫在这里放行）
+    ///   ④ 还原 1.0
+    ///   ⑤ 再滚动 +1500、缩到 0.6、还原 1.0（覆盖 offset 更大的情况）
+    ///
+    /// 每一步都记录 `offset / zoom / visible / window / isZooming`，
+    /// **判据**：`visible` 若落在 `window` 之外 → 那一刻内容区就是空的（黑屏）。
+    /// 结果写入 `Documents/diag_result.txt`，配一张截图，用 `apps pull` 取回。
+    private func runDiagRepro() {
+        guard s.readMode == 1 else {
+            diagMessage = "仅滚动模式（设置 → 阅读模式 → 滚动）支持该诊断"
+            return
+        }
+        stripDiag.reset()
+        diagMessage = "诊断执行中…（约 15 秒，请勿操作）"
+        // ① 跳到非顶部页 —— 顶部 offset≈0，缩小不会复现问题
+        stripRestorePage = min(30, max(0, (store?.count ?? 1) - 1))
+        Task { @MainActor in
+            // 等跳页落位（UIScrollView 异步执行 + 图片开始加载）
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            stripDiag.pending.append(.snapshot("① 跳页后"))
+            stripDiag.pending.append(.scrollBy(600))
+            stripDiag.pending.append(.snapshot("② 滚动+600"))
+            stripDiag.pending.append(.setZoom(0.75))
+            stripDiag.pending.append(.snapshot("③ 缩到0.75(回弹区间)"))
+            stripDiag.pending.append(.setZoom(1.0))
+            stripDiag.pending.append(.snapshot("④ 还原1.0"))
+            stripDiag.pending.append(.scrollBy(1500))
+            stripDiag.pending.append(.snapshot("⑤ 再滚动+1500"))
+            stripDiag.pending.append(.setZoom(0.6))
+            stripDiag.pending.append(.snapshot("⑥ 缩到0.6"))
+            stripDiag.pending.append(.setZoom(1.0))
+            stripDiag.pending.append(.snapshot("⑦ 再还原1.0"))
+            diagTick &+= 1          // 驱动一次 updateUIView，Coordinator 开始逐个消费
+            // 12 步 × 0.55s ≈ 7s，留足余量等序列跑完
+            try? await Task.sleep(nanoseconds: 13_000_000_000)
+            exportDiagnosticScreenshot()
+            diagMessage = stripDiag.flushToDisk()
+        }
+    }
+
 
     // MARK: - 菜单（对应 MenuSettingDialog）
     /// 阅读设置面板。
@@ -1002,6 +1118,141 @@ struct ReaderView: View {
 
 
 
+/// 单页图片视图：按需拉取，内存友好；直接读 @Published 缓存，加载完成自动刷新
+struct StoreImage: View {
+    @ObservedObject var store: ChapterImageStore
+    let index: Int
+    /// 页面缩放：0 适应宽度 / 1 铺满 / 2 完整。
+    /// 滚动长条里槽高 = 宽 × 比例，`scaledToFit` 正好铺满，且没有 GeometryReader 开销。
+    var mode = 2
+    /// 亮度偏移（由阅读器设置传入）。0 = 原样。
+    /// ⚠️ 必须作用在**这张图**上，不能挂到外层 `TabView` —— 色彩滤镜包住翻页容器
+    ///    会导致每次翻页黑一帧（2026-10-23 用户反馈「每翻一页黑一下」）。
+    var brightness: Double = 0
+
+    var body: some View {
+        Group {
+            // ⚠️ 用 current(_:) 单点查询，不要读 `store.loaded` 整字典
+            // （后者每次访问都加锁拷贝整个字典，一屏 10 个 cell 就是 10 次全量拷贝）
+            if let img = store.current(index) {
+                pageImage(img)
+            } else if store.failed.contains(index) {
+                ZStack {
+                    Color.gray.opacity(0.15)
+                    VStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("点击重试").font(.caption)
+                    }
+                    .foregroundStyle(.white.opacity(0.85))
+                }
+                .frame(minHeight: placeholderHeight)
+                .onTapGesture { store.retry(index) }
+            } else {
+                // 未加载页的占位：**只显示页码，不转圈**。
+                // 🔴 原来这里是 `ProgressView` + 页码 —— 翻页时图片若差一帧才到，
+                //    转圈会「出现→消失」，用户看到的就是「一闪一闪」。
+                //    纯色底 + 页码与阅读器底色一致，过渡完全无感。
+                ZStack {
+                    // 近黑而不是纯黑：万一真的出现占位，也不会是一整块死黑。
+                    Color(white: 0.08)
+                    Text("\(index + 1)")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.28))
+                }
+                .frame(minHeight: placeholderHeight)
+                .task {
+                    // 诊断：占位出现即记一条（预载正常时不该出现）。
+                    DiagLog.event("img", "placeholder", "页 \(index + 1) 未就绪，显示占位")
+                    // 🔴 用 **`.ahead` 低优先级**：长条会一次渲染 8 页，占位页里
+                    //    绝大多数在视口之外。以前它们按 `.visible` 抢连接，把真正的
+                    //    可见页挤到后面 —— 用户看到的就是「当前这页要等一下才出图」。
+                    _ = await store.image(at: index, priority: .ahead)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 按 `mode` 摆放这一页。
+    ///
+    /// 🔴 「适应宽度」是**默认**，也是用户要的「和滚动模式一样贴合屏幕」：
+    ///    宽度 = 屏幕宽度，高度按图片比例，**超出屏幕的部分裁掉**（顶部对齐）。
+    ///    滚动模式本来就是这么排的（宽铺满、高按比例往下滚），翻页模式照这个观感走，
+    ///    就不会出现「整页缩在中间、上下两条黑边」的割裂感。
+    @ViewBuilder
+    private func pageImage(_ img: UIImage) -> some View {
+        switch mode {
+        case 1:
+            // 铺满：裁掉溢出边缘，无黑边
+            Image(uiImage: img)
+                .resizable()
+                .scaledToFill()
+                .clipped()
+                .overlay(tintOverlay)
+        case 2:
+            // 完整：整页显示，留黑边
+            Image(uiImage: img)
+                .resizable()
+                .scaledToFit()
+                .overlay(tintOverlay)
+        default:
+            // 适应宽度（默认）：宽铺满、高按比例、顶部对齐、超出裁掉
+            GeometryReader { g in
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: g.size.width)
+                    .overlay(tintOverlay)
+                    .frame(width: g.size.width, height: g.size.height, alignment: .top)
+                    .clipped()
+            }
+        }
+    }
+
+    /// 亮度**用蒙层实现，不用 `.brightness()` 色彩滤镜**。
+    ///
+    /// 🔴 滤镜会在每张图上生成离屏合成层；`TabView(.page)` 翻页时整层重新合成
+    ///    → 黑一帧（2026-10-23 用户实锤「每翻一页黑一下」）。蒙层是普通半透明
+    ///    色块，没有滤镜，翻页零开销。
+    private var tintOverlay: Color {
+        if brightness < -0.001 {
+            return .black.opacity(min(0.65, -brightness * 1.7))   // 变暗
+        }
+        if brightness > 0.001 {
+            return .white.opacity(min(0.22, brightness * 0.7))    // 提亮
+        }
+        return .clear
+    }
+
+    /// 未加载页的**占位高度**。
+    ///
+    /// ── 为什么不能只是 `minHeight: 200`（血坑）────────────────────────────
+    /// `LazyVStack` 靠子视图的**估算高度**决定内容总高与「还要不要继续创建后面的 cell」。
+    /// 占位符只给 200pt 时：
+    ///   1. 整章内容总高被严重低估（真实漫画页 ≈ 屏宽 × 1.4~1.5 ≈ 550pt/页），
+    ///      滚动条开局就快到底，用户往下滑一点立刻回弹
+    ///      → 用户反馈的「**点开漫画后无法往下滑**」；
+    ///   2. LazyVStack 认为可视区之外还有很长的空白，于是一直**不创建后续 cell**，
+    ///      对应的 `.task` 也就永远不触发 → 下面的图**永远不开始加载**
+    ///      → 用户反馈的「**等几分钟都加载不出来**」。
+    ///
+    /// ── 比例的取值优先级（2026-10-12 新增，修「加载时画面割裂」）────────────
+    ///   ① 这一页**自己的真实比例**（`store.ratio(at:)`）——
+    ///      图片被内存淘汰后比例仍留着，所以「滚回去」不会再变高变矮；
+    ///   ② 本章**已加载页比例的中位数** —— 同一章比例通常一致，
+    ///      比写死 1.45 准得多，首次加载的高度跳变会小一个数量级；
+    ///   ③ 兜底 1.45（一个典型漫画页的高宽比）。
+    /// 真图加载出来后由 `scaledToFit` 接管，高度平滑收敛到真实值。
+    private var placeholderHeight: CGFloat {
+        let w = max(UIScreen.main.bounds.width, 1)
+        let ratio = store.ratio(at: index) ?? store.medianRatio ?? 1.45
+        // ⚠️ 这里**不要**再取 `max(320, …)` 之类的下限：滚动模式下每页高度由
+        //    `StripMetrics` 用同一个比例（外加 `stripSpacing`）算好后写进
+        //    `.frame(height:)`，两者必须一致 —— 否则占位符的最小高度会顶开
+        //    固定高度、把布局撑坏。
+        return max(1, w * ratio + StripMetrics.stripSpacing)
+    }
+}
 
 /// 白边裁剪（对应原版白边检测）—— 使用真实行距防越界
 enum WhiteEdgeCutter {
@@ -1056,3 +1307,11 @@ extension ComicRepository {
     }
 }
 
+/// 只在**真的缩放/平移过**时才套 `scaleEffect` + `offset`。
+///
+/// 🔴 为什么必须这么写（2026-10-23 用户反馈「每翻一页黑一下」）：
+///    即使 `scale == 1 && offset == .zero`，`.scaleEffect(1)` 也会让 SwiftUI
+///    生成一层**离屏 transform layer**。这层包在 `TabView(.page)`
+///    （底层 UIPageViewController）外面时，翻页过渡要重新合成整层 →
+///    过渡的那一帧渲染不出来 → **整屏黑一下**。
+///    恒等状态下**不加修饰符**，翻页就恢复原生平滑过渡。
