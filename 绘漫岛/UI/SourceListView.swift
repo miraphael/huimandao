@@ -18,6 +18,10 @@ struct SourceListView: View {
     @State private var showQRExport = false
     @State private var editingSource: ComicSource?
     @State private var loginSource: ComicSource?
+    /// 手动过验证（预填站点地址）
+    @State private var verifyURL: String?
+    /// 规则调试器（预填图源地址）
+    @State private var debugSource: ComicSource?
     /// 待删除的图源（等二次确认）—— 见侧滑「删除」处的说明
     @State private var pendingDelete: ComicSource?
     /// JS 类源（与规则类源混排在同一列表里，见 body 里的说明）
@@ -188,6 +192,26 @@ struct SourceListView: View {
                 ShareSheet(items: shareItems ?? [])
             }
             .sheet(isPresented: $showCheck) { NavigationStack { SourceCheckView() } }
+            .fullScreenCover(item: $verifyURL) { u in
+                NavigationStack {
+                    ManualVerifyView(presetURL: u)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("关闭") { verifyURL = nil }
+                            }
+                        }
+                }
+            }
+            .sheet(item: $debugSource) { src in
+                NavigationStack {
+                    RuleDebugView(presetBaseURL: src.bookSourceUrl)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("关闭") { debugSource = nil }
+                            }
+                        }
+                }
+            }
             .sheet(item: $loginSource) { src in
                 NavigationStack { SourceLoginView(source: src) }
             }
@@ -495,6 +519,10 @@ struct SourceListView: View {
             Menu {
                 Button { editingSource = s } label: { Label("编辑", systemImage: "square.and.pencil") }
                 Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
+                // 🔴 卡在人机验证（Cloudflare/滑块）时的兜底 —— 原来只在「设置→图源」里，
+                //    v165 删掉那个入口后这个功能**彻底没有入口了**（用户反馈「功能残缺」）。
+                Button { verifyURL = s.bookSourceUrl } label: { Label("手动过验证", systemImage: "hand.raised") }
+                Button { debugSource = s } label: { Label("规则调试器", systemImage: "ladybug") }
                 // 单源一键导出二维码（用户找不到多选入口，这里最直接）
                 Button { exportQR([s]) } label: { Label("导出此源二维码", systemImage: "qrcode") }
                 Button { toggleSelect(key) } label: {

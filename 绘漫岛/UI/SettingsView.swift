@@ -34,7 +34,6 @@ struct SettingsView: View {
     /// 完整版本串：`1.0.01 (3)` —— 界面只显示版本号，构建号留给日志排查用。
     /// 版本号规则是「每次升级只加 0.01」，所以版本号本身已经能标识每一次构建。
     static var fullVersion: String { "\(version) (\(buildNumber))" }
-    @State private var acc = AccountStore.load()
 
     // MARK: - 概览数据
 
@@ -317,16 +316,10 @@ struct SettingsView: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                var a = AccountStore.load()
-                if a.isRegistered { AccountStore.refreshStats(into: &a) }
-                acc = a
                 let shelf = ComicRepository.shared.shelfList()
                 sourceCount = ComicRepository.shared.allSources().count
                 shelfCount = shelf.count
                 readCount = shelf.filter { !$0.durChapterUrl.isEmpty }.count
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .hmdAccountChanged)) { _ in
-                acc = AccountStore.load()
             }
         }
     }
