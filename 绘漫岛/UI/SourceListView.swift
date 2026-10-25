@@ -18,8 +18,13 @@ struct SourceListView: View {
     @State private var showQRExport = false
     @State private var editingSource: ComicSource?
     @State private var loginSource: ComicSource?
-    /// 手动过验证（预填站点地址）
-    @State private var verifyURL: String?
+    /// 手动过验证（预填站点地址）—— 包一层才满足 `fullScreenCover(item:)` 的
+    /// `Identifiable` 要求（String 不满足，CI 报过错）
+    struct VerifyTarget: Identifiable {
+        let id = UUID()
+        let url: String
+    }
+    @State private var verifyTarget: VerifyTarget?
     /// 规则调试器（预填图源地址）
     @State private var debugSource: ComicSource?
     /// 待删除的图源（等二次确认）—— 见侧滑「删除」处的说明
@@ -204,12 +209,12 @@ struct SourceListView: View {
     /// 拆成两个 some View 后每段表达式都小得多。
     private var contentWithSheets: some View {
         content
-            .fullScreenCover(item: $verifyURL) { u in
+            .fullScreenCover(item: $verifyTarget) { t in
                 NavigationStack {
-                    ManualVerifyView(presetURL: u)
+                    ManualVerifyView(presetURL: t.url)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
-                                Button("关闭") { verifyURL = nil }
+                                Button("关闭") { verifyTarget = nil }
                             }
                         }
                 }
@@ -533,7 +538,7 @@ struct SourceListView: View {
                 Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
                 // 🔴 卡在人机验证（Cloudflare/滑块）时的兜底 —— 原来只在「设置→图源」里，
                 //    v165 删掉那个入口后这个功能**彻底没有入口了**（用户反馈「功能残缺」）。
-                Button { verifyURL = s.bookSourceUrl } label: { Label("手动过验证", systemImage: "hand.raised") }
+                Button { verifyTarget = VerifyTarget(url: s.bookSourceUrl) } label: { Label("手动过验证", systemImage: "hand.raised") }
                 Button { debugSource = s } label: { Label("规则调试器", systemImage: "ladybug") }
                 // 单源一键导出二维码（用户找不到多选入口，这里最直接）
                 Button { exportQR([s]) } label: { Label("导出此源二维码", systemImage: "qrcode") }
