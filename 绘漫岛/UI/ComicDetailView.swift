@@ -235,15 +235,21 @@ struct ComicDetailView: View {
     /// 「开始阅读」的去向：① 有进度 → 续读；② 只有一章 → 直接进阅读器；③ 其余 → 章节列表
     @ViewBuilder
     private var readDestination: some View {
+        // 🔴 「开始阅读」**一律直接进阅读器**（用户反馈「还是会跳转到下载」）：
+        //    无进度时原来进的是章节列表，而那个页面工具栏上永远挂着
+        //    「下载选中 / 下载最新 10 话 / 下载全部」—— 用户看到的第 2 屏
+        //    满是下载按钮，自然以为「打开成下载了」。
+        //    现在：有进度 → 续读；无进度 → 从第一话开始；章节列表只从「下载」进入。
         if let info {
             if let p = ComicRepository.shared.progress(noteUrl: info.noteUrl),
                p.page > 0 || !p.chapterUrl.isEmpty,
                let last = info.chapters.first(where: { $0.url == p.chapterUrl }) {
                 ReaderView(info: info, startChapter: last, startPage: p.page)
-            } else if info.chapters.count == 1, let only = info.chapters.first {
-                ReaderView(info: info, startChapter: only)
             } else {
-                ChapterListView(info: info, resumeProgress: resumeProgress)
+                let ordered = ChapterSorter.sort(info.chapters)
+                if let first = ordered.first {
+                    ReaderView(info: info, startChapter: first)
+                }
             }
         }
     }
