@@ -96,8 +96,26 @@ struct SourceListView: View {
         if embedded {
             content
         } else {
-            NavigationStack { content }
+            NavigationStack { contentWithSheets }
         }
+    }
+
+    /// 列表本体（List + 一串修饰符）单独成一个 some View ——
+    /// 和 `content` 里的弹层链分开，否则整条表达式会把类型检查器压垮
+    /// （v177 真机 CI 报 `unable to type-check this expression in reasonable time`）。
+    private var sourceList: some View {
+        List {
+            listContent
+        }
+        // 选中后的底部操作条：挂在 List 外层
+        .safeAreaInset(edge: .bottom) {
+            if hasSelection { selectBar }
+        }
+        .environment(\.editMode, $editMode)
+        .transparentScrollBackground()
+        .listStyle(.plain)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
     private var content: some View {
@@ -107,21 +125,8 @@ struct SourceListView: View {
                 EmptyState(title: "还没有图源", systemImage: "square.stack.3d.up",
                            description: "点右上角 + 导入（粘贴 / 文件 / 局域网分享）")
             } else {
-                    List {
-                        listContent
-                    }
-                    // 选中后的底部操作条：挂在 List 外层（原来嵌在 List 里，
-                    // 和 if/else 叠在一起把类型检查器压垮了 —— 报
-                    // "unable to type-check this expression in reasonable time"）
-                    .safeAreaInset(edge: .bottom) {
-                        if hasSelection { selectBar }
-                    }
-                    .environment(\.editMode, $editMode)
-                    .transparentScrollBackground()
-                    .listStyle(.plain)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                }
+                sourceList
+            }
             }
             .navigationTitle("图源")
             .searchable(text: $searchText, prompt: "搜索图源")
@@ -192,6 +197,13 @@ struct SourceListView: View {
                 ShareSheet(items: shareItems ?? [])
             }
             .sheet(isPresented: $showCheck) { NavigationStack { SourceCheckView() } }
+    }
+
+    /// 各种弹层单独一段 —— 一条链上挂 10+ 个 sheet 会把 SwiftUI 的
+    /// 类型检查器压垮（v177 报 `unable to type-check in reasonable time`），
+    /// 拆成两个 some View 后每段表达式都小得多。
+    private var contentWithSheets: some View {
+        content
             .fullScreenCover(item: $verifyURL) { u in
                 NavigationStack {
                     ManualVerifyView(presetURL: u)
