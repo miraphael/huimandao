@@ -557,6 +557,10 @@ struct CoverImage: View {
     /// 看着像被压扁了。
     var fit: Bool = false
     @State private var image: UIImage?
+    /// 加载失败 → 显示重试按钮，点击重试（M3：封面可重试）
+    @State private var failed = false
+    /// 网络波动时的自动重试（最多 1 次自动 + 手动无限次）
+    @State private var attempt = 0
 
     var body: some View {
         ZStack {
@@ -567,14 +571,41 @@ struct CoverImage: View {
                 } else {
                     Image(uiImage: image).resizable().scaledToFill()
                 }
+            } else if failed {
+                // 🔴 失败态可重试：点一下重新加载（网络恢复/瞬时限流后不用退出重进）
+                Button {
+                    attempt += 1
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text("重试")
+                            .font(.system(size: 9))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             } else {
                 Image(systemName: "photo").foregroundStyle(.secondary)
             }
         }
         .clipped()
-        .task(id: url) {
-            image = await Self.load(url: url, referer: referer, ua: ua)
+        .task(id: url) { await load() }
+        .task(id: attempt) {
+            // 首次 attempt=0 由上面的 url task 负责；这里只处理手动重试
+            guard attempt > 0 else { return }
+            await load()
         }
+    }
+
+    /// 共用的加载入口：先清失败态，成功记图，失败记 failed
+    private func load() async {
+        failed = false
+        let img = await Self.load(url: url, referer: referer, ua: ua)
+        image = img
+        failed = (img == nil && !url.isEmpty)
     }
 
     /// 加载封面：主线程外完成 IO + 解码，避免长列表滚动掉帧。
