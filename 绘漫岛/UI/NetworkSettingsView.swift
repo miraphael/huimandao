@@ -11,6 +11,11 @@ struct NetworkSettingsView: View {
     var body: some View {
         Form {
             Section {
+                // 🔴 自动登录 / 自动过验证：源配了 loginUrl（如卡拉漫画的 omo_token）时，
+                //    首次抓取前自动跑一次隐藏 WebView 拿令牌，不需要用户手动点。
+                Toggle("自动登录 / 自动过验证", isOn: $s.autoLogin)
+                Text("遇到需要登录或人机验证的站点时，自动用内置浏览器过一次；关掉后只能手动「网页登录」。")
+                    .font(.caption2).foregroundStyle(.secondary)
                 Toggle("DoH 防污染(腾讯/阿里)", isOn: $s.dohEnabled)
                 TextField("自定义 User-Agent", text: $s.customUA)
                     .autocorrectionDisabled()

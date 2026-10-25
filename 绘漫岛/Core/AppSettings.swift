@@ -70,6 +70,8 @@ final class AppSettings: ObservableObject {
     /// ② 阅读器「下一章」往回走。开启后按章节名里的**话数升序**重排，
     /// 与站点顺序无关（见 `ChapterSorter`）。认不出话数的源会自动放弃排序。
     @AppStorage("chapterAutoSort") var chapterAutoSort = true
+    /// 自动登录 / 自动过验证（源配了 loginUrl 时，首次抓取前自动跑一次隐藏 WebView）
+    @AppStorage("autoLogin") var autoLogin = true
     @AppStorage("showFind") var showFind = false        // 原版发现默认隐藏
 
     // ── 安全防护（加固）──────────────────────────────────────────────────

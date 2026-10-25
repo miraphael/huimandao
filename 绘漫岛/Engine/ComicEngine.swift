@@ -314,6 +314,7 @@ final class ComicEngine {
 
     func searchOne(_ source: ComicSource, keyword: String, page: Int = 1) async -> [SearchResult] {
         guard let rawSearchRule = source.ruleSearchUrl, !rawSearchRule.isEmpty else { return [] }
+        await AutoLogin.ensure(source)   // 自动登录（同上）
         let key = searchScopeKey(source: source.bookSourceUrl, keyword: keyword)
         let hasPlaceholder = PagingStrategyResolver.hasPlaceholder(rawSearchRule)
 
@@ -790,6 +791,8 @@ final class ComicEngine {
                           "❌ 找不到源 origin=\(column.origin)（栏目「\(column.title)」）")
             return []
         }
+        // 🔴 自动登录：源配了 loginUrl 且没登录过 → 先自动跑一次隐藏 WebView 拿 token
+        await AutoLogin.ensure(s)
         let r = await browse(url: column.url, source: s, page: page, extraHeaders: column.headers)
         // 🔎 插桩：栏目 URL、最终条目数 —— 「该栏目暂无内容」一看便知卡在哪
         DiagLog.event("find", "explore",
@@ -887,6 +890,8 @@ final class ComicEngine {
                 forceRefresh: Bool = false,
                 skipPagination: Bool = false,
                 reuseMetadataFrom: ComicInfo? = nil) async -> ComicInfo {
+        // 🔴 自动登录：从书架/搜索直接进详情时也要保证登录态
+        if let src = ComicRepository.shared.source(url: origin) { await AutoLogin.ensure(src) }
         // 诊断链：一次详情加载 = 一个 session，后面关键节点都带上它
         let diag = DiagLog.begin("detail")
         let t0 = Date()
