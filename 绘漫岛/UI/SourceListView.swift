@@ -683,11 +683,21 @@ struct SourceListView: View {
                         } label: { Label("排序", systemImage: "arrow.up.arrow.down") }
                         Button { showEditor = true } label: { Label("新建图源", systemImage: "plus.square") }
                         Button { exportAll() } label: { Label("导出全部为 JSON 文件", systemImage: "doc.badge.arrow.up") }
-                        // 🔴 二维码导出的**主入口**（原来只在多选条里，用户找不到）
-                        Button { exportQR(sources) } label: { Label("导出全部为二维码", systemImage: "qrcode") }
+                        // 🔴 二维码导出：**一个按钮自适应**
+                        //    · 有勾选 → 导出勾选的（标题显示数量）
+                        //    · 没勾选 → 导出全部启用中的
+                        //    ⚠️ 这里原来是个**占位按钮**：点了只弹「先勾选图源，再点底部 ⋯」，
+                        //       根本没有导出功能 —— 用户点右上角永远是这句提示，
+                        //       看起来就是「功能残缺、没串起来」（2026-10-25 用户反馈）。
                         Button {
-                            toast = "先勾选图源，再点底部 ⋯ →「导出选中为二维码」"
-                        } label: { Label("导出为二维码…", systemImage: "qrcode") }
+                            let picked = selectedSources
+                            exportQR(picked.isEmpty ? sources : picked)
+                        } label: {
+                            Label(selectedSources.isEmpty
+                                  ? "导出全部为二维码"
+                                  : "导出选中的 \(selectedSources.count) 个为二维码",
+                                  systemImage: "qrcode")
+                        }
                         Button { exportEncrypted() } label: { Label("一键加密导出(S001)", systemImage: "lock") }
                         Divider()
                         Button { ComicRepository.shared.setAllSourcesEnabled(true); reload() } label: { Label("全部启用", systemImage: "checkmark.circle") }
