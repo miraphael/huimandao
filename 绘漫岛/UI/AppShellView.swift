@@ -61,6 +61,22 @@ struct AppShellView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !bar.hidden { shellBar }
         }
+        // 🔴 保险：切页 / 回前台 一律恢复底栏 ——
+        //    阅读器用 `hidden` 隐藏底栏，万一 onDisappear 没触发（SwiftUI 偶发），
+        //    底栏会永久消失。这两条兜底把它拉回来。
+        .onChange(of: page) { _ in
+            ShellBarState.shared.hidden = false
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willEnterForegroundNotification)) { _ in
+            ShellBarState.shared.hidden = false
+        }
+        .onAppear {
+            DiagLog.event("shell", "bar", "底栏出现（hidden=\(bar.hidden)）")
+        }
+        .onChange(of: bar.hidden) { v in
+            DiagLog.event("shell", "bar", v ? "底栏隐藏（进入阅读）" : "底栏恢复")
+        }
     }
 
     // MARK: - 页面
@@ -101,13 +117,13 @@ struct AppShellView: View {
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: p.icon)
-                            .font(.system(size: 17, weight: active ? .semibold : .regular))
+                            .font(.system(size: 18, weight: active ? .semibold : .regular))
                             .symbolRenderingMode(.hierarchical)
                         Text(p.title)
                             .font(.system(size: 9, weight: active ? .semibold : .regular))
                             .lineLimit(1)
                     }
-                    .foregroundStyle(active ? Theme.accent : Theme.text.opacity(0.52))
+                    .foregroundStyle(active ? Theme.accent : Theme.text.opacity(0.62))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 5)
                     .contentShape(Rectangle())
@@ -117,10 +133,13 @@ struct AppShellView: View {
             }
         }
         .padding(.top, 7)
-        // 🔴 Legado 截图：底栏**没有白色条**，就是页面背景色自然延续 + 顶部细线
-        .background(Theme.background)
+        // 🔴 底栏必须**看得出是个栏**：v166 按截图改成「页面底色延续」后，
+        //    浅色主题下和页面几乎同色 + 图标 52% 灰 → 用户反馈「底部没看到有东西」。
+        //    现在用 surface 卡面 + 顶部细线 + 上投影，明确分层。
+        .background(Theme.surface)
         .overlay(alignment: .top) {
             Rectangle().fill(HMD.stroke).frame(height: 0.6)
         }
+        .shadow(color: .black.opacity(0.07), radius: 10, x: 0, y: -3)
     }
 }

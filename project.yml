@@ -105,9 +105,9 @@ targets:
         PRODUCT_NAME: 绘漫岛
         # 🔴 版本号规则：**每次升级只加 0.01** —— 1.0.01 → 1.0.02 → 1.0.03 …
         #    （末位两位，每次 +1，读作 +0.01；不要一次跳到 1.1.0 这种大步）
-        MARKETING_VERSION: "1.1.8"
+        MARKETING_VERSION: "1.1.9"
         # 构建号：iOS 要求它是单调递增的整数，与上面的版本号各自独立维护
-        CURRENT_PROJECT_VERSION: 113
+        CURRENT_PROJECT_VERSION: 114
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.9"
         ENABLE_BITCODE: NO

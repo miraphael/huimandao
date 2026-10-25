@@ -173,7 +173,13 @@ struct SourceListView: View {
                 }
             }
             .sheet(isPresented: $showImport) { ImportSheet(onDone: reload) }
-            .sheet(isPresented: $showQRExport) { SourceQRExportView(sources: exportList) }
+            // 🔴 二维码导出改用 **fullScreenCover** 而不是第 12 个 `.sheet`：
+            //    本视图链上已有 11 个 sheet，链式挂载会互相抢占（SwiftUI 已知问题），
+            //    二维码页因此弹不出来（真机日志 `[qr]` 一条都没有）。
+            //    fullScreenCover 走独立的呈现通道，不受其它 sheet 影响。
+            .fullScreenCover(isPresented: $showQRExport) {
+                SourceQRExportView(sources: exportList)
+            }
             .sheet(isPresented: $showGroupManage) {
                 SourceGroupManageView { reload() }
             }
@@ -310,15 +316,26 @@ struct SourceListView: View {
         }
     }
 
+    /// 统一的二维码导出入口：任何入口都走这里（带诊断日志，便于真机排查）
+    private func exportQR(_ list: [ComicSource]) {
+        guard !list.isEmpty else {
+            toast = "没有可导出的图源"
+            DiagLog.event("qr", "entry", "❌ 导出列表为空")
+            return
+        }
+        exportList = list
+        selected.removeAll()
+        showQRExport = true
+        DiagLog.event("qr", "entry", "打开二维码页：\(list.count) 个源")
+    }
+
     private func exportSelected() {
         let picked = selectedSources
         guard !picked.isEmpty else {
             toast = "先勾选要导出的图源"
             return
         }
-        exportList = picked
-        selected.removeAll()
-        showQRExport = true
+        exportQR(picked)
     }
 
     // 加入 / 移出分组
@@ -478,6 +495,8 @@ struct SourceListView: View {
             Menu {
                 Button { editingSource = s } label: { Label("编辑", systemImage: "square.and.pencil") }
                 Button { loginSource = s } label: { Label("网页登录(捕获Cookie)", systemImage: "person.badge.key") }
+                // 单源一键导出二维码（用户找不到多选入口，这里最直接）
+                Button { exportQR([s]) } label: { Label("导出此源二维码", systemImage: "qrcode") }
                 Button { toggleSelect(key) } label: {
                     Label(isSel ? "取消选择" : "选择", systemImage: "checkmark.circle")
                 }
@@ -664,6 +683,8 @@ struct SourceListView: View {
                         } label: { Label("排序", systemImage: "arrow.up.arrow.down") }
                         Button { showEditor = true } label: { Label("新建图源", systemImage: "plus.square") }
                         Button { exportAll() } label: { Label("导出全部为 JSON 文件", systemImage: "doc.badge.arrow.up") }
+                        // 🔴 二维码导出的**主入口**（原来只在多选条里，用户找不到）
+                        Button { exportQR(sources) } label: { Label("导出全部为二维码", systemImage: "qrcode") }
                         Button {
                             toast = "先勾选图源，再点底部 ⋯ →「导出选中为二维码」"
                         } label: { Label("导出为二维码…", systemImage: "qrcode") }
