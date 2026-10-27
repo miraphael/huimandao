@@ -36,7 +36,13 @@ enum HMDImagePipeline {
     /// ⚠️ 必须与 `ChapterImageStore.maxConcurrent`（应用层并发闸门）保持一致，
     ///    否则闸门放行的任务会在 URLSession 内部排队，白等一轮。
     /// 取值依据见下面 `config.httpMaximumConnectionsPerHost` 处的实测表。
-    static let maxConnectionsPerHost = 14
+    /// 🔴 2026-10-27 从 14 降到 6。
+    ///    真机反馈「所有图源打开都要点重试、一直出不来图」，
+    ///    而同样的图片地址在桌面单线程请求 **200 / 1~2 秒**。
+    ///    14 路并发会把上行带宽切成 14 份：单张 300KB~1MB 的正文图
+    ///    在慢链路上很容易超过 30 秒的单请求超时 → 整批失败 → 全部显示重试。
+    ///    这里回到 6（URLSession 默认量级），并配合把超时放宽到 60/120。
+    static let maxConnectionsPerHost = 6
 
     /// 管线实例（全局共享）。App 启动时调用一次 `setup()`。
     static let shared = ImagePipeline(delegate: nil) {
@@ -54,8 +60,11 @@ enum HMDImagePipeline {
         // 数据加载：独立的 URLSession，不启用 URLSession 自己的缓存（避免与 DataCache 双份）
         let config = URLSessionConfiguration.default
         config.urlCache = nil
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
+        // 🔴 单请求 60s / 整资源 120s（原 30/60）。
+        //    正文图动辄 0.3~1.5MB，图站单连接限速 40~85KB/s 时，
+        //    30 秒根本不够 —— 以前表现为「图片永远加载失败、只能点重试」。
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 120
         // 🔴 **每个 host 的最大连接数**（2026-10-17 实测，这是图片慢的真正瓶颈）。
         //
         // `URLSessionConfiguration.default` 的默认值是 **6**，而图站是 **HTTP/1.1**

@@ -16,7 +16,7 @@ import Foundation
 enum SourceContentPatch {
 
     /// 只跑一次；以后要再补新规则时把版本号 +1。
-    private static let flagKey = "patch.contentRules.v2"
+    private static let flagKey = "patch.contentRules.v3"
 
     static func applyIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
@@ -86,9 +86,14 @@ enum SourceContentPatch {
         // 图库：懒加载在 data-original，去掉 query 后需 Referer（源 header 已配）
         Patch(host: "tuku.cc", book: "tag.img@data-original##\\?.*"),
 
-        // 包子：图统一在 static-tw 图床，先按 host 改写
+        // 包子：**不要**做 host 改写。
+        // 2026-10-27 实测：章节页的图就在 `https://s1.bzcdn.net/scomic/…`，
+        // 改成 `static-tw.baozimh.com` 反而全 404（那个域只放 `/static/` 静态资源）。
+        // 旧规则里的 `##https://s\d+\.bzcdn\.net##https://static-tw.baozimh.com`
+        // 是**错的**，这里用 dropBadBook 精确清掉，改回直取 src。
         Patch(host: "cnbzmg.com",
-              book: "tag.img@src##https://s\\d+\\.bzcdn\\.net##https://static-tw.baozimh.com"),
+              book: "tag.img@src",
+              dropBadBook: "tag.img@src##https://s\\d+\\.bzcdn\\.net##https://static-tw.baozimh.com"),
 
         // 漫画网：`<div id="pics">` 是空的，由混淆过的 pic-v2.js 填充 →
         // 规则无能为力，交给「正文 0 图 → 内置浏览器渲染」兜底（v184）。

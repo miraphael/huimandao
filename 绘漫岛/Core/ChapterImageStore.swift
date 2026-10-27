@@ -519,7 +519,10 @@ final class ChapterImageStore: ObservableObject {
     /// 所以 **14 是安全上限**：再往上就变成「失败 + 重试」，净效果更慢。
     /// ⚠️ 必须与 `HMDImagePipeline.maxConnectionsPerHost` 保持一致，
     ///    否则闸门放行的任务会在 URLSession 内部排队白等。
-    private static let maxConcurrent = 14
+    /// 🔴 2026-10-27：14 → 6。必须与 `HMDImagePipeline.maxConnectionsPerHost`
+    ///    保持一致；两者都降到 6 是因为真机上 14 路并发会把带宽切碎，
+    ///    单张图超过超时阈值 → 整批失败（用户看到「全都要点重试」）。
+    private static let maxConcurrent = 6
     /// 慢链路自适应：若最近几次请求明显偏慢，暂时把预载收敛，
     /// 避免「越慢越排队、越排队越慢」。阈值取实测代理态中位数（约 8s）。
     private static let slowRTT: TimeInterval = 6.5
@@ -899,9 +902,13 @@ final class ChapterImageStore: ObservableObject {
 
         guard let req = HMDImagePipeline.request(url: url, referer: referer, ua: ua,
                                                 headers: hh, priority: priority.nuke) else {
+            DiagLog.event("img", "badurl", "页 \(index) 请求构造失败 \(url)")
             setFailed(index)
             return nil
         }
+        // 日志里去掉 query（可能带 token），只留路径便于判断
+        let bareURL = String(url.split(separator: "?", maxSplits: 1,
+                                       omittingEmptySubsequences: false).first ?? "")
 
         var attempt = 0
         while attempt < 2 {
@@ -921,7 +928,12 @@ final class ChapterImageStore: ObservableObject {
                 //    `(Data, URLResponse?)`，不是 `Data`！写 `d.isEmpty` 会报
                 //    "value of tuple type has no member 'isEmpty'"，写
                 //    `data = d` 会报 "cannot assign '(Data, URLResponse?)' to 'Data?'"。
-                let (d, _) = try await HMDImagePipeline.shared.data(for: req)
+                let (d, resp) = try await HMDImagePipeline.shared.data(for: req)
+                // 🔎 非 2xx 一定要记：以前响应被丢掉，403/404 和「网络失败」
+                //    在日志里长得一模一样，根本分不出是防盗链还是解析错。
+                if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    DiagLog.event("img", "http", "页 \(index) HTTP \(http.statusCode) \(bareURL)")
+                }
                 data = d.isEmpty ? nil : d
             } catch let err as ImagePipeline.Error {
                 // ⚠️ Nuke 抛的是 `ImagePipeline.Error`（枚举），**不是** `CancellationError`。
@@ -930,9 +942,16 @@ final class ChapterImageStore: ObservableObject {
                 //    结果「用户滚动导致的取消」会被当成「真实失败」→ 页面被标 failed。
                 //    枚举里的 `.cancelled` 才是取消信号（见 Aidoku 的 switch 写法）。
                 if case .cancelled = err { return nil }
+                // 🔎 把 Nuke 的底层错误打出来。`String(describing:)` 会把关联的
+                //    URLError 一起打印，例如 `dataLoadingFailed(Code=-1003)`：
+                //      -1003 = 域名解析失败、-1009 = 断网、-1001 = 超时、
+                //      -1200 = TLS 握手失败、-1011 = 响应非 2xx。
+                //    没有这一行，用户报「图片一直重试」时只能靠猜。
+                DiagLog.event("img", "err", "页 \(index) \(Self.describe(err)) \(bareURL)")
                 data = nil                     // 真正的网络/解码失败
             } catch {
                 if Task.isCancelled { return nil }
+                DiagLog.event("img", "err", "页 \(index) \(error.localizedDescription) \(bareURL)")
                 data = nil
             }
             guard let data else {
@@ -971,13 +990,42 @@ final class ChapterImageStore: ObservableObject {
                 setLoaded(index, img)
                 return img
             }
+            // 解码失败：把字节数和文件头打出来 —— 是 HTML 错误页还是真图一眼可辨
+            DiagLog.event("img", "decode",
+                          "页 \(index) 解码失败 \(bytes.count)B head="
+                          + bytes.prefix(8).map { String(format: "%02X", $0) }.joined()
+                          + " \(bareURL)")
             if Task.isCancelled { return nil }
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
         // 走到这里是真的两次都失败了。若这期间任务被取消，不要标失败。
         if Task.isCancelled { return nil }
+
+        // 🔴 兜底：Nuke 的 DataLoader 两次都失败 → 换 `HttpFetcher` 再试一次。
+        //    HttpFetcher 与「抓章节页」是同一条链路（同 UA / Cookie / 超时策略），
+        //    所以「页面能开、图片打不开」时这一跳常常能救回来；顺带把状态码写进日志。
+        if !Task.isCancelled {
+            let (d, r) = await HttpFetcher.shared.fetchDataWithResponse(url, headers: hh, timeout: 40)
+            DiagLog.event("img", "fallback",
+                          "页 \(index) Nuke 两次失败 → HttpFetcher HTTP \(r?.statusCode ?? -1) \(d.count)B \(bareURL)")
+            if !d.isEmpty, var img = UIImage(data: d) {
+                if whiteCut { img = WhiteEdgeCutter.cut(img) }
+                HMDImagePipeline.shared.cache.storeCachedImage(ImageContainer(image: img), for: req)
+                setLoaded(index, img)
+                return img
+            }
+        }
         setFailed(index)
         return nil
+    }
+
+    /// 把 Nuke 的 `ImagePipeline.Error` 翻成可读文本（带上底层错误码）。
+    private static func describe(_ e: ImagePipeline.Error) -> String {
+        let s = String(describing: e)
+        if let u = (e as NSError).userInfo[NSUnderlyingErrorKey] as? NSError {
+            return "\(s) ⟵ \(u.domain)#\(u.code)"
+        }
+        return s
     }
 
     /// 用户点击重试
