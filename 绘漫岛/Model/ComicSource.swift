@@ -127,11 +127,18 @@ struct ComicSource: Codable, Identifiable, Hashable {
         ruleChapterApiUrl = s(.ruleChapterApiUrl)
         ruleContentUrl = s(.ruleContentUrl)
         ruleContentUrlNext = s(.ruleContentUrlNext)
-        // 🔴 兼容别名：我们早期导出的图源 JSON 把正文图规则写成 `ruleContentList`，
-        //    而模型只认 `ruleBookContent` → 解码时静默丢弃 → 引擎拿不到规则、
-        //    正文图只能靠万用扫 `<img>`（JS 生成图的站直接白屏）。
-        //    这里做一次别名映射，以后无论导哪种写法都不会再丢。
-        ruleBookContent = s(.ruleBookContent) ?? s(.ruleContentList)
+        ruleBookContent = s(.ruleBookContent)
+        // 🔴 兼容别名：早期导出的图源 JSON 把正文图规则写成 `ruleContentList`，
+        //    模型里没这个 key → 解码时**静默丢弃** → 引擎拿不到规则、正文图
+        //    只能靠万用扫 `<img>`（JS 生成图的站直接白屏）。
+        //    ⚠️ 不能直接加进 CodingKeys —— 没有同名存储属性会让 `Encodable`
+        //       合成失败（CI 报 `does not conform to protocol 'Encodable'`）。
+        //       所以用动态 key 容器单独读一次。
+        if ruleBookContent == nil,
+           let alias = try? decoder.container(keyedBy: AliasKey.self),
+           let k = AliasKey(stringValue: "ruleContentList") {
+            ruleBookContent = (try? alias.decodeIfPresent(String.self, forKey: k)) ?? nil
+        }
         ruleBookContentDecoder = s(.ruleBookContentDecoder)
         ruleContentFlow = (try? c.decodeIfPresent([ContentFlowStep].self, forKey: .ruleContentFlow))
     }
@@ -146,7 +153,7 @@ struct ComicSource: Codable, Identifiable, Hashable {
         case ruleCoverUrl, ruleCoverDecoder, ruleChapterId, ruleChapterList, ruleChapterName, ruleChapterUrl
         case ruleChapterUrlNext, ruleChapterParentId, ruleChapterParentName, ruleContentUrl, ruleContentUrlNext
         case ruleChapterApi, ruleChapterApiList, ruleChapterApiUrl
-        case ruleBookContent, ruleBookContentDecoder, ruleContentFlow, ruleContentList
+        case ruleBookContent, ruleBookContentDecoder, ruleContentFlow
     }
 
     /// 这个源能不能出现在「发现」页：有栏目规则 + 开关打开
@@ -161,4 +168,13 @@ struct ComicSource: Codable, Identifiable, Hashable {
 
     var delayMs: Int { Int(bookDelayTime ?? "") ?? 0 }
     var singleThread: Bool { bookSingleThread != nil && bookSingleThread != "否" }
+}
+
+/// 只为读「别名 key」用的动态 CodingKey —— 不参与 `CodingKeys`，
+/// 因此不会影响 `Encodable` 的自动合成。
+private struct AliasKey: CodingKey {
+    let stringValue: String
+    init?(stringValue: String) { self.stringValue = stringValue }
+    var intValue: Int? { nil }
+    init?(intValue: Int) { nil }
 }
