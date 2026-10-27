@@ -156,9 +156,10 @@ struct RecommendView: View {
                         EmptyState(title: "该栏目暂无内容", systemImage: "sparkles",
                                    description: needsLogin
                                        ? "「\(selectedSource?.bookSourceName ?? "该图源")」需要先网页登录获取访问令牌，否则抓取会一直失败"
-                                       : "图源可能需要网络代理，或换个栏目/图源试试",
-                                   actionTitle: needsLogin ? "去网页登录" : nil) {
-                            showLogin = true
+                                       : "站点可能限流或需要过验证，点下面重试一次（会自动尝试内置浏览器过验证）",
+                                   actionTitle: needsLogin ? "去网页登录" : "重新加载") {
+                            if needsLogin { showLogin = true }
+                            else { Task { await load(page: 1) } }
                         }
                     }
                     if !loading && sources.isEmpty {

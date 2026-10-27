@@ -480,6 +480,24 @@ final class ComicEngine {
             }
         }
 
+        // 🔴 兜底：栏目 URL 抓不到/解析不出 → **回落到源首页**用同一套规则再解析一次。
+        //    实测很多站（卡拉、瓜子）的分类页对移动端/设备网络会限流，而首页正常；
+        //    首页往往也是同一批卡片，能出内容比「空白」有用得多。
+        if results.isEmpty, !looksJSON, !requestUrl.hasPrefix(source.bookSourceUrl) {
+            let home = source.bookSourceUrl
+            let homeHTML = await HttpFetcher.shared.fetchPage(home, method: "GET", body: nil,
+                                                               headers: headers, timeout: 25)
+            if !homeHTML.isEmpty {
+                let homeResults = await parseResults(homeHTML, source: source, baseUrl: home)
+                if !homeResults.isEmpty {
+                    DiagLog.event("find", "fallback",
+                                  "栏目抓取失败 → 回落首页解析成功：\(homeResults.count) 条")
+                    results = homeResults
+                    html = homeHTML
+                }
+            }
+        }
+
         let canScanLinks = PagingStrategyResolver.canScanLinks(isHTML: !looksJSON)
         let candidate = canScanLinks
             ? Self.findNextLink(html, baseUrl: requestUrl, currentPage: page) : nil

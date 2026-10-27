@@ -172,6 +172,19 @@ final class HttpFetcher {
             (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")))
         if !AntiBot.isChallenge(status: resp?.statusCode ?? 0,
                                 headers: headerMap(resp), body: html) {
+            // 🔴 「极短响应」也是一种拦截：真机日志里 manhua3 的发现页只回了 **39 字**
+            //    （`⚠️ 解析为空：html 39 字`），它不是标准挑战页特征，于是被当成
+            //    正常 HTML 返回 → 解析 0 条 → 用户看到「这个源没内容」。
+            //    正常列表页不可能 < 500 字，这里统一按「疑似拦截」升级 WebView。
+            let trimmed = html.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isJSONish = trimmed.hasPrefix("{") || trimmed.hasPrefix("[")
+            if isGet, httpLike, !isJSONish, trimmed.count < 500 {
+                DiagLog.event("fetch", "short",
+                              "疑似拦截页 \(trimmed.count) 字（\(DiagLog.safeURL(url))）：\(trimmed.prefix(100))")
+                if let r = await renderViaWebView(url: url), r.count > trimmed.count {
+                    return r
+                }
+            }
             return html
         }
         guard isGet, httpLike else { return html }   // POST 不升级
@@ -194,6 +207,8 @@ final class HttpFetcher {
         if let r = await renderViaWebView(url: url) { return r }
 
         // 全链失败 → 返回空串（绝不返回挑战页，见约束 ②）
+        DiagLog.event("fetch", "fail",
+                      "全链失败 \(DiagLog.safeURL(url)) status=\(resp?.statusCode ?? -1) bytes=\(data.count)")
         return ""
     }
 
