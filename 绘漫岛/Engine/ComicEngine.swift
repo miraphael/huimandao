@@ -875,6 +875,34 @@ final class ComicEngine {
                                            chapterUrl: chapterUrl, source: source)
     }
 
+    /// 识别「正文图由 JS 拼出来」的站点，直接从脚本变量生成图片地址。
+    ///
+    /// 实测 W漫画的章节页：
+    /// ```js
+    /// var num = eval("27")
+    /// var pasd = "https://image4.wmanhua.com/mh/<hash>/<uuid>/"
+    /// img.setAttribute('data-src', pasd + i + '.webp')   // i = 1…num
+    /// ```
+    /// HTML 里没有任何 `<img src>`，所以规则/万用都扫不到 → 阅读器空白。
+    /// 这里按同样的规律生成 `pasd1.webp … pasdN.webp`（也兼容 `.jpg`）。
+    static func jsTemplateImages(html: String) -> [String]? {
+        func firstMatch(_ pattern: String, _ text: String) -> String? {
+            guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+            let ns = text as NSString
+            guard let m = re.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
+                  m.numberOfRanges > 1 else { return nil }
+            return ns.substring(with: m.range(at: 1))
+        }
+        guard let pasd = firstMatch(#"var\s+pasd\s*=\s*[\"']([^\"']+)[\"']"#, html) else { return nil }
+        guard let numStr = firstMatch(#"var\s+num\s*=\s*eval\(\s*[\"']?(\d+)"#, html)
+                ?? firstMatch(#"var\s+num\s*=\s*(\d+)"#, html),
+              let num = Int(numStr), num > 0, num <= 500 else { return nil }
+        // 扩展名：优先沿用页面里出现的后缀
+        let ext = html.contains(".webp") ? "webp" : (html.contains(".jpg") ? "jpg" : "webp")
+        let base = pasd.hasSuffix("/") ? pasd : pasd + "/"
+        return (1...num).map { "\(base)\($0).\(ext)" }
+    }
+
     /// 万用正文兜底：直接抓章节页 + `UniversalParser.scanImages`。
     /// 与 `universalChaptersFallback` 配对，见其说明。
     private static func universalImagesFallback(chapterUrl: String, origin: String,
@@ -2027,6 +2055,39 @@ final class ComicEngine {
                 }),
             ])
         if pipedImages.winner == .universal { images = pipedImages.value }
+        }
+
+        // 🔴 两条通用兜底（2026-10-27，用户反馈「很多漫画打开一直重试也没图片」）：
+        //    根因是 6 个图源的 `ruleContentList` **全为空**，正文图全靠万用扫 `<img>`。
+        //    但有一类站点的图**不在 HTML 里**：
+        //      · 卡拉：图片由页面脚本注入 → HTML 里一个 <img> 都没有
+        //      · W漫画：`var num=eval("27"); var pasd="…/"; pasd+i+".webp"` → JS 拼出来
+        //    这两种站点「打开没图、一直重试」，靠规则永远修不好。
+        if images.isEmpty, !isJson {
+            // ① JS 拼图模式：直接从脚本变量生成地址（零网络开销）
+            if let gen = Self.jsTemplateImages(html: html) {
+                images = gen
+                DiagLog.event("content", "jsgen", "JS 拼图模式命中：\(gen.count) 张")
+            }
+            // ② 仍为空 → 用内置浏览器渲染章节页，再扫一遍（JS 注入图只能这么拿）
+            if images.isEmpty,
+               let rendered = await WebViewRuleEngine.shared.fetchRendered(url: chapterUrl),
+               !rendered.isEmpty, rendered != html {
+                var d2 = UniversalParser.Diagnosis()
+                let scanned = UniversalParser.scanImages(html: rendered, pageUrl: chapterUrl,
+                                                         baseOrigin: s.bookSourceUrl, diagnosis: &d2)
+                let abs = scanned.compactMap { u -> String? in
+                    let a = s.absoluteUrl(u, base: chapterUrl)
+                    return a.isEmpty ? nil : a
+                }
+                let kept = CompatKit.dropForeign(abs, pageUrl: chapterUrl)
+                if !kept.isEmpty {
+                    images = kept
+                    DiagLog.event("content", "render", "WebView 渲染后取到 \(kept.count) 张图")
+                } else {
+                    DiagLog.event("content", "render", "❌ WebView 渲染后仍 0 张：\(DiagLog.safeURL(chapterUrl))")
+                }
+            }
         }
 
         // 正文下一页（统一游标：与搜索/栏目/章节共用 PageCursor 合同）
