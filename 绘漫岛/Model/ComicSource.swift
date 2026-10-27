@@ -127,7 +127,11 @@ struct ComicSource: Codable, Identifiable, Hashable {
         ruleChapterApiUrl = s(.ruleChapterApiUrl)
         ruleContentUrl = s(.ruleContentUrl)
         ruleContentUrlNext = s(.ruleContentUrlNext)
-        ruleBookContent = s(.ruleBookContent)
+        // 🔴 兼容别名：我们早期导出的图源 JSON 把正文图规则写成 `ruleContentList`，
+        //    而模型只认 `ruleBookContent` → 解码时静默丢弃 → 引擎拿不到规则、
+        //    正文图只能靠万用扫 `<img>`（JS 生成图的站直接白屏）。
+        //    这里做一次别名映射，以后无论导哪种写法都不会再丢。
+        ruleBookContent = s(.ruleBookContent) ?? s(.ruleContentList)
         ruleBookContentDecoder = s(.ruleBookContentDecoder)
         ruleContentFlow = (try? c.decodeIfPresent([ContentFlowStep].self, forKey: .ruleContentFlow))
     }
@@ -142,7 +146,7 @@ struct ComicSource: Codable, Identifiable, Hashable {
         case ruleCoverUrl, ruleCoverDecoder, ruleChapterId, ruleChapterList, ruleChapterName, ruleChapterUrl
         case ruleChapterUrlNext, ruleChapterParentId, ruleChapterParentName, ruleContentUrl, ruleContentUrlNext
         case ruleChapterApi, ruleChapterApiList, ruleChapterApiUrl
-        case ruleBookContent, ruleBookContentDecoder, ruleContentFlow
+        case ruleBookContent, ruleBookContentDecoder, ruleContentFlow, ruleContentList
     }
 
     /// 这个源能不能出现在「发现」页：有栏目规则 + 开关打开
