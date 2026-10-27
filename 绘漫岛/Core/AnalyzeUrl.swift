@@ -96,6 +96,15 @@ struct AnalyzeUrl {
     /// 求值顺序: {p1,p2}页码备选 → {{js}} → searchPage±N → searchKey
     static func evalVars(_ s: String, searchKey: String, page: Int, charset: String?, urlEncode: Bool) -> String {
         var out = s
+        // 🔴 有些导入链路会把 `{{page}}` 的花括号**百分号编码**成 `%7B%7Bpage%7D%7D`。
+        //    真机日志实证：`[explore] 栏目「全部」 url=https://www.tuku.cc/comics-p%7B%7Bpage%7D%7D/ → 0 条`
+        //    —— 字面 `{{` 不存在，`evalInlineJS` 的守卫直接放过 → 页码永不替换 →
+        //    图库/包子这类 `{{page}}` 源**整栏目空**、切源一直转圈。
+        //    这里先把成对的花括号还原（只动成对形式，避免误伤单个 `%7B`）。
+        if out.range(of: "%7B%7B", options: .caseInsensitive) != nil {
+            out = out.replacingOccurrences(of: "%7B%7B", with: "{{", options: .caseInsensitive)
+                     .replacingOccurrences(of: "%7D%7D", with: "}}", options: .caseInsensitive)
+        }
         // {page1,page2,...} 页码备选（不含 {{}}/@/冒号引号的纯逗号列表；超出取最后一个）
         if let re = try? NSRegularExpression(pattern: "\\{([^{}'\":@]*,[^{}'\":@]*)\\}") {
             let ns = NSMutableString(string: out)

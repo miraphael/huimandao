@@ -16,7 +16,7 @@ import Foundation
 enum SourceContentPatch {
 
     /// 只跑一次；以后要再补新规则时把版本号 +1。
-    private static let flagKey = "patch.contentRules.v3"
+    private static let flagKey = "patch.contentRules.v4"
 
     static func applyIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
@@ -30,7 +30,11 @@ enum SourceContentPatch {
 
             // ① 清掉历史上配错的规则（W漫画：`tag.img@data-src` 指向 loading.svg，
             //    结果「有图但全是占位符」，还会挡住后面的万用兜底）
-            if let bad = patch.dropBadBook, (s.ruleBookContent ?? "") == bad {
+            // ⚠️ 用「包含」而不是「完全相等」：用户库里那条规则可能是更早的写法
+            //    （`s\d\.bzcdn\.net` 少个 `+`），精确匹配会静默不命中 —— 
+            //    真机日志里包子图片全是 404 就是这个原因。
+            if let bad = patch.dropBadBook,
+               let cur = s.ruleBookContent, cur.contains(bad) {
                 s.ruleBookContent = nil
                 applied = true
             }
@@ -93,7 +97,7 @@ enum SourceContentPatch {
         // 是**错的**，这里用 dropBadBook 精确清掉，改回直取 src。
         Patch(host: "cnbzmg.com",
               book: "tag.img@src",
-              dropBadBook: "tag.img@src##https://s\\d+\\.bzcdn\\.net##https://static-tw.baozimh.com"),
+              dropBadBook: "static-tw.baozimh.com"),
 
         // 漫画网：`<div id="pics">` 是空的，由混淆过的 pic-v2.js 填充 →
         // 规则无能为力，交给「正文 0 图 → 内置浏览器渲染」兜底（v184）。

@@ -19,6 +19,12 @@ enum AutoLogin {
     static let ttl: TimeInterval = 12 * 3600
 
     private static var running = Set<String>()
+    /// 失败冷却：同一个源自动登录失败后，10 分钟内不再重试。
+    /// 🔴 真机实证：漫画网的 `loginUrl` 是一条搜索页，隐藏 WebView 永远「没放行」，
+    ///    每次抓取前都要等满 25 秒 → 用户看到「切换图源一直加载、切不过去」。
+    ///    失败就该认输，别每次都拿 25 秒再撞一次。
+    private static var failedAt: [String: Date] = [:]
+    private static let failureCooldown: TimeInterval = 10 * 60
     private static let lock = NSLock()
 
     /// 确保该源可用于抓取：需要登录就先自动登录一次。
@@ -29,6 +35,13 @@ enum AutoLogin {
         guard let loginUrl = s.loginUrl, !loginUrl.isEmpty else { return true }
         // 已拿到登录态 → 放行（过期由「失败后重跑」兜底，不在这里计时）
         if let r = s.loginUrlResult, !r.isEmpty { return true }
+        // 刚失败过 → 冷却期内直接放行（不阻塞抓取）
+        lock.lock()
+        let recentFail = failedAt[s.bookSourceUrl].map {
+            Date().timeIntervalSince($0) < failureCooldown
+        } ?? false
+        lock.unlock()
+        if recentFail { return false }
 
         guard begin(s.bookSourceUrl) else { return true }   // 并发去重：同一源只跑一次
         defer { end(s.bookSourceUrl) }
@@ -37,7 +50,9 @@ enum AutoLogin {
                       "自动登录开始：\(s.bookSourceName) → \(DiagLog.safeURL(loginUrl))")
         let res = await WebViewRuleEngine.shared.passChallenge(url: loginUrl, maxWaitMs: 25_000)
         guard res.passed else {
-            DiagLog.event("login", "auto", "❌ 自动登录失败：\(s.bookSourceName)（页面没放行）")
+            lock.lock(); failedAt[s.bookSourceUrl] = Date(); lock.unlock()
+            DiagLog.event("login", "auto",
+                          "❌ 自动登录失败：\(s.bookSourceName)（页面没放行）→ 10 分钟内不再尝试")
             return false
         }
 

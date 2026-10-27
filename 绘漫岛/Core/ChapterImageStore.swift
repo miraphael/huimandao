@@ -1005,14 +1005,39 @@ final class ChapterImageStore: ObservableObject {
         //    HttpFetcher 与「抓章节页」是同一条链路（同 UA / Cookie / 超时策略），
         //    所以「页面能开、图片打不开」时这一跳常常能救回来；顺带把状态码写进日志。
         if !Task.isCancelled {
-            let (d, r) = await HttpFetcher.shared.fetchDataWithResponse(url, headers: hh, timeout: 40)
-            DiagLog.event("img", "fallback",
-                          "页 \(index) Nuke 两次失败 → HttpFetcher HTTP \(r?.statusCode ?? -1) \(d.count)B \(bareURL)")
-            if !d.isEmpty, var img = UIImage(data: d) {
-                if whiteCut { img = WhiteEdgeCutter.cut(img) }
-                HMDImagePipeline.shared.cache.storeCachedImage(ImageContainer(image: img), for: req)
-                setLoaded(index, img)
-                return img
+            // 变体 ①：原样（与 Nuke 完全一致的请求头）
+            var variants: [(String, [String: String])] = [("原样", hh)]
+            // 变体 ②：不带 Referer / Cookie。
+            //   真机实证：瓜子图床对 `Referer: -` 这种占位值直接 403（4548B），
+            //   而对「完全没有 Referer」返回 200 —— 空值和不发是两个不同的结果。
+            var noRef = hh
+            noRef.removeValue(forKey: "Referer")
+            noRef.removeValue(forKey: "Cookie")
+            variants.append(("无Referer", noRef))
+            // 变体 ③：Referer 换成图源根域（部分站只认根）
+            if !origin.isEmpty {
+                var root = noRef
+                root["Referer"] = origin
+                variants.append(("源根Referer", root))
+            }
+            for (name, hv) in variants {
+                let (d, r) = await HttpFetcher.shared.fetchDataWithResponse(url, headers: hv, timeout: 40)
+                let st = r?.statusCode ?? -1
+                DiagLog.event("img", "fallback",
+                              "页 \(index) [\(name)] HTTP \(st) \(d.count)B \(bareURL)")
+                if st == 200, !d.isEmpty, var img = UIImage(data: d) {
+                    if whiteCut { img = WhiteEdgeCutter.cut(img) }
+                    HMDImagePipeline.shared.cache.storeCachedImage(ImageContainer(image: img), for: req)
+                    setLoaded(index, img)
+                    return img
+                }
+                // 非 200 且响应体很小 → 多半是拦截页/错误说明，把开头记下来便于定性
+                if st != 200, d.count > 0, d.count < 4096,
+                   let txt = String(data: d.prefix(180), encoding: .utf8) {
+                    DiagLog.event("img", "body",
+                                  "页 \(index) \(st) "
+                                  + txt.replacingOccurrences(of: "\n", with: " ").prefix(160))
+                }
             }
         }
         setFailed(index)
