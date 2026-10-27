@@ -16,7 +16,7 @@ import Foundation
 enum SourceContentPatch {
 
     /// 只跑一次；以后要再补新规则时把版本号 +1。
-    private static let flagKey = "patch.contentRules.v1"
+    private static let flagKey = "patch.contentRules.v2"
 
     static func applyIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
@@ -25,17 +25,24 @@ enum SourceContentPatch {
         for var s in ComicRepository.shared.allSources() {
             guard let host = URL(string: s.bookSourceUrl)?.host?.lowercased(),
                   let patch = table.first(where: { host.contains($0.host) }) else { continue }
-            let hasBook = !(s.ruleBookContent ?? "").isEmpty
             let hasFlow = (s.ruleContentFlow?.count ?? 0) > 0
-            guard !hasBook, !hasFlow else { continue }   // 有规则就不动
-
             var applied = false
-            if let book = patch.book, !book.isEmpty {
-                s.ruleBookContent = book
+
+            // ① 清掉历史上配错的规则（W漫画：`tag.img@data-src` 指向 loading.svg，
+            //    结果「有图但全是占位符」，还会挡住后面的万用兜底）
+            if let bad = patch.dropBadBook, (s.ruleBookContent ?? "") == bad {
+                s.ruleBookContent = nil
                 applied = true
             }
-            if let json = patch.flowJSON, let flow = decodeFlow(json) {
+            // ② flow 优先于 ruleBookContent（引擎里也是先跑 flow），
+            //    所以只要还没有 flow 就装 —— 不被已有的 rule 挡住
+            if !hasFlow, let json = patch.flowJSON, let flow = decodeFlow(json) {
                 s.ruleContentFlow = flow
+                applied = true
+            }
+            // ③ 直配规则：只在空的时候填，不覆盖用户/原有配置
+            if (s.ruleBookContent ?? "").isEmpty, let book = patch.book, !book.isEmpty {
+                s.ruleBookContent = book
                 applied = true
             }
             guard applied else { continue }
@@ -54,8 +61,12 @@ enum SourceContentPatch {
 
     private struct Patch {
         let host: String
+        /// 直配的正文图规则（只在**空**的时候填）
         var book: String? = nil
+        /// 多级内容流（优先于 `book`；只要还没有 flow 就装）
         var flowJSON: String? = nil
+        /// 清掉历史遗留的**错误**规则（目前只有 W漫画 的 `tag.img@data-src`）
+        var dropBadBook: String? = nil
     }
 
     private static let table: [Patch] = [
@@ -67,7 +78,7 @@ enum SourceContentPatch {
 
         // W漫画：`var num = eval("17")` + `var pasd = "…/"`
         // → 图片就是 pasd + i + ".webp"。HTML 里一个 <img src> 都没有。
-        Patch(host: "wmanhua.com", flowJSON: wmanhuaFlowJSON),
+        Patch(host: "wmanhua.com", flowJSON: wmanhuaFlowJSON, dropBadBook: "tag.img@data-src"),
 
         // 瓜子：正文图有独立 class，不配规则会被 8 张「推荐封面」污染
         Patch(host: "guazimanhua.com", book: "tag.img.reading-image@src"),
