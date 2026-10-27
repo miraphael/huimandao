@@ -2070,9 +2070,9 @@ final class ComicEngine {
                 DiagLog.event("content", "jsgen", "JS 拼图模式命中：\(gen.count) 张")
             }
             // ② 仍为空 → 用内置浏览器渲染章节页，再扫一遍（JS 注入图只能这么拿）
-            if images.isEmpty,
-               let rendered = await WebViewRuleEngine.shared.fetchRendered(url: chapterUrl),
-               !rendered.isEmpty, rendered != html {
+            //    ⚠️ `fetchRendered` 返回的是**非可选** String（空串表示失败），不能用 if let
+            let rendered = await WebViewRuleEngine.shared.fetchRendered(url: chapterUrl)
+            if images.isEmpty, !rendered.isEmpty, rendered != html {
                 var d2 = UniversalParser.Diagnosis()
                 let scanned = UniversalParser.scanImages(html: rendered, pageUrl: chapterUrl,
                                                          baseOrigin: s.bookSourceUrl, diagnosis: &d2)
