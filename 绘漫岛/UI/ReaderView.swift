@@ -1134,13 +1134,34 @@ struct StoreImage: View {
             if let img = store.current(index) {
                 pageImage(img)
             } else if store.failed.contains(index) {
+                // 🔴 失败页必须说清「为什么 + 怎么办」（2026-10-28 成熟度改造）。
+                //    以前只有「点击重试」四个字：包子图床整站 404 时，用户只能一直点，
+                //    还以为是自己网络的问题。现在按 `FailureReason` 分类展示：
+                //      · 网络不通 → 检查网络后重试
+                //      · 图片地址失效 → 这个源图床挂了，建议换源
+                //      · 被站点拦截 → 去图源页「网页登录」
+                let reason = store.reason(at: index) ?? .unknown
                 ZStack {
                     Color.gray.opacity(0.15)
-                    VStack(spacing: 6) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("点击重试").font(.caption)
+                    VStack(spacing: 5) {
+                        Image(systemName: reason.symbol)
+                            .font(.system(size: 20, weight: .medium))
+                        Text(reason.title)
+                            .font(.caption.weight(.semibold))
+                        Text(reason.advice)
+                            .font(.caption2)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 30)
+                            .opacity(0.78)
+                        // 只有「重试有意义」的原因才提示点按（404/403 点多少次都没用）
+                        if reason.isWorthRetrying {
+                            Text("点击重试")
+                                .font(.caption2)
+                                .opacity(0.55)
+                                .padding(.top, 2)
+                        }
                     }
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(.white.opacity(0.88))
                 }
                 .frame(minHeight: placeholderHeight)
                 .onTapGesture { store.retry(index) }

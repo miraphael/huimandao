@@ -158,6 +158,13 @@ final class ChapterImageStore: ObservableObject {
     /// ⚠️ **永不淘汰**（`evictOutsideWindow` 不碰它）—— 理由见 `ratio(at:)` 的说明。
     private var _ratios: [Int: CGFloat] = [:]
     private var _failed: Set<Int> = []
+    /// 每页的**失败原因**（2026-10-28）。UI 靠它把「点击重试」换成
+    /// 「图片地址失效 · 建议换源」这类可执行的提示。
+    private var _reasons: [Int: FailureReason] = [:]
+    /// 图床级熔断：同一章节里连续 N 页 `notFound` → 判定「该源图床挂了」，
+    /// 后面的页直接标失败，不再逐页发请求（包子实测：18 页 × 2 次重试 = 20 秒白等）。
+    private var consecutiveNotFound = 0
+    private static let notFoundBreakLimit = 3
     private var _urls: [String]
     /// 每个 index 对应的在飞任务。用 Task 而不是 Bool 标记：
     /// 后来者直接 await 同一个 Task，不再轮询等待。
@@ -597,6 +604,8 @@ final class ChapterImageStore: ObservableObject {
         lock.lock()
         _loaded[index] = image
         _failed.remove(index)
+        _reasons.removeValue(forKey: index)
+        consecutiveNotFound = 0          // 有图能出来 → 图床没挂，重置熔断
         // 记下真实宽高比（**永不淘汰**）—— 布局靠它才算得准，见 `ratio(at:)`
         let w = image.size.width
         var isNewRatio = false
@@ -634,9 +643,16 @@ final class ChapterImageStore: ObservableObject {
         persistRatiosNow()
     }
 
-    private func setFailed(_ index: Int) {
+    /// 该页失败的原因（供阅读器失败页展示；没失败过返回 nil）
+    func reason(at index: Int) -> FailureReason? {
+        lock.lock(); defer { lock.unlock() }
+        return _reasons[index]
+    }
+
+    private func setFailed(_ index: Int, _ reason: FailureReason = .unknown) {
         lock.lock()
         _failed.insert(index)
+        _reasons[index] = reason
         lock.unlock()
         // 🔎 插桩：**「黑屏图片」的头号嫌疑就是这条** —— 加载失败时页面会显示
         //    失败态（黑底 + 重试按钮），用户看到的就是「一堆黑屏图片」。
@@ -796,7 +812,7 @@ final class ChapterImageStore: ObservableObject {
     private func loadLocalFile(_ index: Int, path: String) async -> UIImage? {
         if Task.isCancelled { return nil }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)), !data.isEmpty else {
-            setFailed(index)
+            setFailed(index, .notFound)   // 离线文件被系统清掉了
             return nil
         }
         var bytes = data
@@ -806,7 +822,7 @@ final class ChapterImageStore: ObservableObject {
             bytes = await Self.decodeBytes(bytes, origin: origin, baseUrl: path, headers: [:])
         }
         guard var img = UIImage(data: bytes) else {
-            setFailed(index)
+            setFailed(index, .decode)
             return nil
         }
         if whiteCut { img = WhiteEdgeCutter.cut(img) }
@@ -903,13 +919,22 @@ final class ChapterImageStore: ObservableObject {
         guard let req = HMDImagePipeline.request(url: url, referer: referer, ua: ua,
                                                 headers: hh, priority: priority.nuke) else {
             DiagLog.event("img", "badurl", "页 \(index) 请求构造失败 \(url)")
-            setFailed(index)
+            setFailed(index, .ruleMiss)
+            return nil
+        }
+        // 🔴 图床级熔断：本会话里已经连续 3 页 404 → 判定该源图床失效，
+        //    后面的页不再发请求（包子实测 18 页 × 2 次重试 = 白等 20 秒）。
+        lock.lock(); let broken = consecutiveNotFound >= Self.notFoundBreakLimit; lock.unlock()
+        if broken {
+            setFailed(index, .notFound)
             return nil
         }
         // 日志里去掉 query（可能带 token），只留路径便于判断
         let bareURL = String(url.split(separator: "?", maxSplits: 1,
                                        omittingEmptySubsequences: false).first ?? "")
 
+        /// 本轮所有尝试里最后一次失败的归因（给 UI 用）
+        var lastReason: FailureReason = .unknown
         var attempt = 0
         while attempt < 2 {
             attempt += 1
@@ -933,6 +958,7 @@ final class ChapterImageStore: ObservableObject {
                 //    在日志里长得一模一样，根本分不出是防盗链还是解析错。
                 if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                     DiagLog.event("img", "http", "页 \(index) HTTP \(http.statusCode) \(bareURL)")
+                    lastReason = FailureReason.from(status: http.statusCode)
                 }
                 data = d.isEmpty ? nil : d
             } catch let err as ImagePipeline.Error {
@@ -948,10 +974,12 @@ final class ChapterImageStore: ObservableObject {
                 //      -1200 = TLS 握手失败、-1011 = 响应非 2xx。
                 //    没有这一行，用户报「图片一直重试」时只能靠猜。
                 DiagLog.event("img", "err", "页 \(index) \(Self.describe(err)) \(bareURL)")
+                lastReason = FailureReason.from(error: err)
                 data = nil                     // 真正的网络/解码失败
             } catch {
                 if Task.isCancelled { return nil }
                 DiagLog.event("img", "err", "页 \(index) \(error.localizedDescription) \(bareURL)")
+                lastReason = FailureReason.from(error: error)
                 data = nil
             }
             guard let data else {
@@ -1031,6 +1059,7 @@ final class ChapterImageStore: ObservableObject {
                     setLoaded(index, img)
                     return img
                 }
+                if st != 200 { lastReason = FailureReason.from(status: st) }
                 // 非 200 且响应体很小 → 多半是拦截页/错误说明，把开头记下来便于定性
                 if st != 200, d.count > 0, d.count < 4096,
                    let txt = String(data: d.prefix(180), encoding: .utf8) {
@@ -1040,7 +1069,11 @@ final class ChapterImageStore: ObservableObject {
                 }
             }
         }
-        setFailed(index)
+        // 图床级故障计数：连续 404 说明是**站点**挂了，不是这一页的问题
+        lock.lock()
+        if lastReason == .notFound { consecutiveNotFound += 1 } else { consecutiveNotFound = 0 }
+        lock.unlock()
+        setFailed(index, lastReason)
         return nil
     }
 
