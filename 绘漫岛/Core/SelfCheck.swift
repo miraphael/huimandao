@@ -26,57 +26,57 @@ enum SelfCheck {
     static func run() {
         let cases: [Case] = [
             // ── 失败归因（v190 新增，UI 全靠它说人话）──────────────────
-            Case("FailureReason 404→notFound") { FailureReason.from(status: 404) == .notFound },
-            Case("FailureReason 403→blocked") { FailureReason.from(status: 403) == .blocked },
-            Case("FailureReason 503→server") { FailureReason.from(status: 503) == .server },
-            Case("FailureReason 断网→network") {
+            Case(name: "FailureReason 404→notFound") { FailureReason.from(status: 404) == .notFound },
+            Case(name: "FailureReason 403→blocked") { FailureReason.from(status: 403) == .blocked },
+            Case(name: "FailureReason 503→server") { FailureReason.from(status: 503) == .server },
+            Case(name: "FailureReason 断网→network") {
                 FailureReason.from(error: URLError(.notConnectedToInternet)) == .network
             },
-            Case("FailureReason 超时→timeout") {
+            Case(name: "FailureReason 超时→timeout") {
                 FailureReason.from(error: URLError(.timedOut)) == .timeout
             },
-            Case("404 不值得重试") { FailureReason.notFound.isWorthRetrying == false },
-            Case("超时值得重试") { FailureReason.timeout.isWorthRetrying },
+            Case(name: "404 不值得重试") { FailureReason.notFound.isWorthRetrying == false },
+            Case(name: "超时值得重试") { FailureReason.timeout.isWorthRetrying },
 
             // ── 分页占位符（v189 修的真 bug：%7B%7B 没还原 → 图库 0 条）──
-            Case("{{page}} 正常替换") {
+            Case(name: "{{page}} 正常替换") {
                 AnalyzeUrl.evalVars("https://a.com/p{{page}}/", searchKey: "", page: 3,
                                     charset: nil, urlEncode: true) == "https://a.com/p3/"
             },
-            Case("{{page}} 被编码后仍能替换") {
+            Case(name: "{{page}} 被编码后仍能替换") {
                 AnalyzeUrl.evalVars("https://a.com/p%7B%7Bpage%7D%7D/", searchKey: "", page: 2,
                                     charset: nil, urlEncode: true) == "https://a.com/p2/"
             },
-            Case("searchPage 替换") {
+            Case(name: "searchPage 替换") {
                 AnalyzeUrl.evalVars("https://a.com/s?p=searchPage", searchKey: "", page: 4,
                                     charset: nil, urlEncode: true) == "https://a.com/s?p=4"
             },
 
             // ── Referer 占位值（v189 修的真 bug：`-` 当字面量发出 → 瓜子 403）──
-            Case("Referer: - 视为不发") {
+            Case(name: "Referer: - 视为不发") {
                 ComicEngine.SourceReferer.override(in: "Referer: -") == ""
             },
-            Case("Referer 空值视为不发") {
+            Case(name: "Referer 空值视为不发") {
                 ComicEngine.SourceReferer.override(in: "Referer: ") == ""
             },
-            Case("Referer 正常值保留") {
+            Case(name: "Referer 正常值保留") {
                 ComicEngine.SourceReferer.override(in: "Referer: https://a.com/") == "https://a.com/"
             },
-            Case("无 header 返回 nil") {
+            Case(name: "无 header 返回 nil") {
                 ComicEngine.SourceReferer.override(in: nil) == nil
             },
 
             // ── 图片 URL 编码（中文路径，图库在用）────────────────────
-            Case("中文路径百分号编码") {
+            Case(name: "中文路径百分号编码") {
                 HMDImagePipeline.asciiEncoded("/h/海贼王/1.jpg")
                     == "/h/%E6%B5%B7%E8%B4%BC%E7%8E%8B/1.jpg"
             },
-            Case("纯 ASCII 不编码（保留 [ ] ?）") {
+            Case(name: "纯 ASCII 不编码（保留 [ ] ?）") {
                 HMDImagePipeline.asciiEncoded("/a[1]/b.jpg?x=1") == "/a[1]/b.jpg?x=1"
             },
 
             // ── 章节排序（番外要排在正文后面）────────────────────────
-            Case("章节排序：番外不插到正文中间") {
+            Case(name: "章节排序：番外不插到正文中间") {
                 let chs = [
                     ComicInfo.Chapter(name: "第2话", url: "u2"),
                     ComicInfo.Chapter(name: "番外1", url: "ex1"),
@@ -89,7 +89,7 @@ enum SelfCheck {
             },
 
             // ── header 解析（图源大量依赖）────────────────────────────
-            Case("header 行解析") {
+            Case(name: "header 行解析") {
                 let h = LegadoConverter.parseHeader("Referer: https://a.com/\nUser-Agent: X")
                 return h["Referer"] == "https://a.com/" && h["User-Agent"] == "X"
             },
