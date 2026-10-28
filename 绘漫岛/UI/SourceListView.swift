@@ -630,7 +630,17 @@ struct SourceListView: View {
 
     @ViewBuilder
     private func healthBadge(_ s: ComicSource) -> some View {
-        if SourceHealth.isStale(for: s) {
+        // 熔断状态优先于「历史体检结论」：这是**刚刚发生**的事实，
+        // 而体检清单可能是几天前桌面端测的。用户问「为什么这个源没反应」时，
+        // 这个角标就是答案。
+        if let snap = SourceBreaker.shared.shouldSkip(s.bookSourceUrl) {
+            Text("本会话暂停 \(snap.failures) 次")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(HMD.Semantic.error)
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(HMD.Semantic.error.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 3))
+        } else if SourceHealth.isStale(for: s) {
             Text("健康数据过期").font(.caption2).foregroundStyle(.secondary)
         } else if let h = SourceHealth.state(sourceUrl: s.bookSourceUrl), let b = h.badge {
             Text(b).font(.caption2)
@@ -755,6 +765,17 @@ struct SourceListView: View {
                         .disabled(updating)
                         Button { disableKnownBad() } label: {
                             Label("停用已知不可用源(\(SourceHealth.badSources(sources).count))", systemImage: "exclamationmark.triangle")
+                        }
+                        // 熔断是「本会话」的临时结论，必须给用户一个手动清除的出口：
+                        // 否则站点恢复了他还得重启 App 才知道（看不到「为什么还是被跳过」）。
+                        Button {
+                            let n = SourceBreaker.shared.openCount()
+                            SourceBreaker.shared.resetAll()
+                            reload()
+                            toast = n > 0 ? "已重置 \(n) 个源的熔断状态" : "当前没有处于熔断的源"
+                        } label: {
+                            Label("重置本会话熔断(\(SourceBreaker.shared.openCount()))",
+                                  systemImage: "arrow.clockwise.circle")
                         }
                         Button { Task { await webShare() } } label: { Label("局域网分享(Web服务)", systemImage: "wifi") }
         } label: {

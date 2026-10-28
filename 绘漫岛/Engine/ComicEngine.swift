@@ -5,6 +5,36 @@ import SwiftSoup
 final class ComicEngine {
     static let shared = ComicEngine()
 
+    // MARK: - 源级熔断（见 `Core/SourceBreaker.swift`）
+
+    /// 本会话已熔断的源 → 直接跳过，不再发请求。
+    ///
+    /// 🔴 这是「切包子一直转圈」的正面修复：坏源不再每次都重付一遍超时，
+    ///    而是第一次就返回，界面立刻能给出「已跳过」的结论。
+    private func breakerShouldSkip(_ origin: String, stage: String) -> Bool {
+        guard let snap = SourceBreaker.shared.shouldSkip(origin) else { return false }
+        DiagLog.event("breaker", "skip",
+                      "\(stage) 跳过 \(DiagLog.safeURL(origin))"
+                      + "（本会话连续失败 \(snap.failures) 次 · \(snap.lastReason?.title ?? "未知")）")
+        return true
+    }
+
+    /// 抓取失败 → 记账。原因按该 host 最近一次 HTTP 状态判（`HttpFetcher.lastStatus`）。
+    private func breakerNoteFailure(_ origin: String, stage: String) {
+        let host = URL(string: origin)?.host ?? ""
+        let status = HttpFetcher.shared.lastStatus(forHost: host) ?? 0
+        let reason: FailureReason = status > 0 ? FailureReason.from(status: status) : .timeout
+        if SourceBreaker.shared.recordFailure(origin, reason: reason) {
+            DiagLog.event("breaker", "open",
+                          "\(stage) \(DiagLog.safeURL(origin)) 连续失败 \(SourceBreaker.shared.limit) 次"
+                          + "（\(reason.title)）→ 本会话暂停该源")
+        }
+    }
+
+    private func breakerNoteSuccess(_ origin: String) {
+        SourceBreaker.shared.recordSuccess(origin)
+    }
+
     // MARK: - 并发搜索（默认 32 线程）
 
     /// 全图源搜索：结果流式回调（UI 边到边显示），最终返回全量去重结果
@@ -314,6 +344,7 @@ final class ComicEngine {
 
     func searchOne(_ source: ComicSource, keyword: String, page: Int = 1) async -> [SearchResult] {
         guard let rawSearchRule = source.ruleSearchUrl, !rawSearchRule.isEmpty else { return [] }
+        if breakerShouldSkip(source.bookSourceUrl, stage: "搜索") { return [] }
         await AutoLogin.ensure(source)   // 自动登录（同上）
         let key = searchScopeKey(source: source.bookSourceUrl, keyword: keyword)
         let hasPlaceholder = PagingStrategyResolver.hasPlaceholder(rawSearchRule)
@@ -363,6 +394,7 @@ final class ComicEngine {
         }
         guard !html.isEmpty else {
             abortPage(key, url: target)
+            breakerNoteFailure(source.bookSourceUrl, stage: "搜索")
             return []
         }
         let trimmed = html.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -415,6 +447,8 @@ final class ComicEngine {
         let next = await extractNext(html, source: source, baseUrl: target, page: page)
         finishPage(key, page: page, nextURL: next,
                    itemIDs: results.map(\.id), allowsComputedFallback: true)
+        // 抓到页面 = 这个源是活的；解析 0 条是「关键词没结果」，不是源坏了
+        if !html.isEmpty { breakerNoteSuccess(source.bookSourceUrl) }
         return results
     }
 
@@ -424,6 +458,8 @@ final class ComicEngine {
                 extraHeaders: [String: String] = [:]) async -> [SearchResult] {
         let pagerKey = "COLUMN|\(source.bookSourceUrl)|\(url)"
         if page <= 1 { resetCursor(pagerKey) }
+        // 发现页是最容易被坏源拖死的入口（一次要刷 20 个栏目）→ 熔断优先
+        if breakerShouldSkip(source.bookSourceUrl, stage: "发现") { return [] }
         let discoveredNext = page > 1 ? nextURL(pagerKey) : nil
         let strategies = PagingStrategyResolver.candidates(
             sourceRule: nil, urlRule: url, allowsLinkScan: true)
@@ -466,6 +502,7 @@ final class ComicEngine {
             DiagLog.event("find", "browse",
                           "❌ 抓取失败 \(DiagLog.safeURL(requestUrl))（ua=\(source.httpUserAgent?.prefix(24) ?? "无")）")
             abortPage(pagerKey, url: requestUrl)
+            breakerNoteFailure(source.bookSourceUrl, stage: "发现")
             return []
         }
 
@@ -510,6 +547,7 @@ final class ComicEngine {
         finishPage(pagerKey, page: page, nextURL: candidate,
                    itemIDs: results.map(\.id),
                    allowsComputedFallback: allowsComputedFallback)
+        if !html.isEmpty { breakerNoteSuccess(source.bookSourceUrl) }
         return results
     }
 
@@ -1006,6 +1044,15 @@ final class ComicEngine {
             DiagLog.event(diag, "detail", "找不到图源，直接返回空（源可能被禁用/删除）")
             return info
         }
+        // 熔断中的源不再发请求 —— 直接给出「为什么跳过」，
+        // 否则用户会看到一张永远转圈的空白详情页。
+        if let snap = SourceBreaker.shared.shouldSkip(origin) {
+            DiagLog.event(diag, "breaker", "skip 详情跳过（本会话连续失败 \(snap.failures) 次）")
+            info.diagnosis = "该源本会话已连续失败 \(snap.failures) 次"
+                + "（\(snap.lastReason?.title ?? "未知")），已暂时跳过以免一直转圈。"
+                + "可下拉刷新重试，或换一个源看这本。"
+            return info
+        }
         DiagLog.event(diag, "detail", "源=\(s.bookSourceName) 入口=\(DiagLog.safeURL(noteUrl))")
         let baseUrl = noteUrl.isEmpty ? origin : noteUrl
         // ⚠️ 源自带的 `header`（Legado 全局请求头）必须注入：
@@ -1070,6 +1117,7 @@ final class ComicEngine {
             info.diagnosis = Self.explain(outcome, origin: origin, url: noteUrl)
             DiagLog.event(diag, "detail", "详情页取不到 HTML：\(info.diagnosis.prefix(80))",
                           ms: Int(Date().timeIntervalSince(t0) * 1000))
+            breakerNoteFailure(origin, stage: "详情")
             return info
         }
         let isJson = html.trimmingCharacters(in: .whitespaces).hasPrefix("{") || html.trimmingCharacters(in: .whitespaces).hasPrefix("[")
@@ -1314,6 +1362,8 @@ final class ComicEngine {
                       "完成：书名=\(info.name.isEmpty ? "(空)" : info.name) 章节=\(info.chapters.count)"
                       + (info.diagnosis.isEmpty ? "" : " 诊断=\(info.diagnosis.prefix(60))"),
                       ms: Int(Date().timeIntervalSince(t0) * 1000))
+        // 拿到详情页 = 源是活的 → 清零失败计数（半开试探成功也走这里恢复）
+        breakerNoteSuccess(origin)
         return info
     }
 

@@ -186,9 +186,24 @@ final class DetailSession: ObservableObject {
                     let hitOrigin = hit.origin
                     let headers = hit.noteHeaders
                     group.addTask {
-                        let detail = await ComicEngine.shared.detail(
-                            noteUrl: hitUrl, origin: hitOrigin, extraHeaders: headers)
-                        return (hitID, detail.chapters.count)
+                        // ── 两个改动都是为了「切源一直转圈」（2026-10-28 用户实测）──
+                        //
+                        // ① `skipPagination: true`
+                        //    核验只需要回答「这个源有没有章节」，不需要完整章节列表。
+                        //    而分页探测恰恰是最慢的一段：每个源要多发 2~5 次请求，
+                        //    慢站单源就能吃掉 20 秒。12 个候选串下来就是两分钟。
+                        //
+                        // ② 8 秒硬上限
+                        //    详情页主取数最坏是 15s + 30s（首次+重试）。没有上限时，
+                        //    一个坏源能让整批停在原地 —— 用户看到的就是「一直加载」。
+                        //    超时返回 -1（未核验），列表里标出来，而不是让它消失。
+                        let count = await AsyncTimeout.run(seconds: 8, fallback: -1) {
+                            let detail = await ComicEngine.shared.detail(
+                                noteUrl: hitUrl, origin: hitOrigin,
+                                extraHeaders: headers, skipPagination: true)
+                            return detail.chapters.count
+                        }
+                        return (hitID, count)
                     }
                 }
                 var values: [(String, Int)] = []

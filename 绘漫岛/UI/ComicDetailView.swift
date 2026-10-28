@@ -554,7 +554,9 @@ struct MultiSourceDetail: View {
                 Text("其他图源")
             } footer: {
                 if !hits.isEmpty && !probing {
-                    Text("已逐个核对各源的真实章节数 —— 有章节的排在前面，优先选它们。")
+                    Text("已逐个核对各源的真实章节数 —— 有章节的排在前面，优先选它们。"
+                         + "「未核验」= 8 秒内没核完（慢站或该源当前不可用）；"
+                         + "「已暂停」= 该源本会话连续失败多次，暂时跳过以免一直转圈。")
                         .font(.caption2)
                 }
             }
@@ -581,15 +583,28 @@ struct MultiSourceDetail: View {
 
     @ViewBuilder
     private func chapterBadge(_ h: SearchResult) -> some View {
-        if let n = chapterCounts[h.id] {
-            Text(n > 0 ? "\(n) 章" : "0 章")
-                .font(.caption2)
-                .foregroundStyle(n > 0 ? .green : .orange)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background((n > 0 ? Color.green : Color.orange).opacity(0.12), in: Capsule())
+        // 本会话已熔断的源：先说清「为什么这个源排不上」，而不是显示一个空白的加载中
+        if let snap = SourceBreaker.shared.shouldSkip(h.origin) {
+            badge("已暂停", color: .red)
+                .accessibilityLabel("已暂停：本会话连续失败 \(snap.failures) 次")
+        } else if let n = chapterCounts[h.id] {
+            if n < 0 {
+                // -1 = 8 秒内没核验完（慢站或坏源）。显示出来比让它消失诚实。
+                badge("未核验", color: .gray)
+            } else {
+                badge(n > 0 ? "\(n) 章" : "0 章", color: n > 0 ? .green : .orange)
+            }
         } else if probing {
             ProgressView().scaleEffect(0.6)
         }
+    }
+
+    private func badge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundStyle(color)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(color.opacity(0.12), in: Capsule())
     }
 
     private func find() async {

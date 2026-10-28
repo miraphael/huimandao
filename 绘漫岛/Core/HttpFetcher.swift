@@ -63,6 +63,32 @@ final class HttpFetcher {
     static let shared = HttpFetcher()
     private let session: URLSession
 
+    // MARK: - 最近一次抓取的 HTTP 状态（供失败归因 / 源级熔断）
+
+    /// `fetchPage` 只返回 String，**状态码被吞掉了** —— 于是上层拿不到
+    /// 「403 被拦」「404 地址失效」「503 站点故障」的区别，只能一律当成
+    /// 「抓不到」。`SourceBreaker` 需要按原因决定要不要熔断，
+    /// 所以这里留一份按 host 的最新状态。
+    ///
+    /// 约定：`0` = 网络层就失败了（没拿到任何 HTTP 响应），`nil` = 本会话没记录过。
+    private var lastStatusByHost: [String: Int] = [:]
+    private let statusLock = NSLock()
+
+    func lastStatus(forHost host: String) -> Int? {
+        guard !host.isEmpty else { return nil }
+        statusLock.lock(); defer { statusLock.unlock() }
+        return lastStatusByHost[host.lowercased()]
+    }
+
+    private func recordStatus(host: String, _ status: Int) {
+        guard !host.isEmpty else { return }
+        statusLock.lock()
+        // 防止长期运行无限增长；超过 256 个 host 直接清空重来（只是诊断缓存）
+        if lastStatusByHost.count > 256 { lastStatusByHost.removeAll(keepingCapacity: true) }
+        lastStatusByHost[host.lowercased()] = status
+        statusLock.unlock()
+    }
+
     /// ── 直连会话：**显式禁用 HTTP 代理** ──────────────────────────────────
     ///
     /// 为什么需要（实测驱动）：`www.yck2026.fun` 走本机代理返回 **code=000**，
@@ -168,6 +194,7 @@ final class HttpFetcher {
         // ── L0 ──
         var (data, resp) = await fetchDataWithResponse(url, method: method, body: body,
                                                        headers: headers, timeout: timeout)
+        recordStatus(host: host, resp?.statusCode ?? 0)
         var html = decode(data, charsetHint: Self.charsetFromContentType(
             (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")))
         if !AntiBot.isChallenge(status: resp?.statusCode ?? 0,
@@ -195,6 +222,7 @@ final class HttpFetcher {
             // ── L2 用新 Cookie/UA 重试 ──
             (data, resp) = await fetchDataWithResponse(url, method: method, body: body,
                                                        headers: headers, timeout: timeout)
+            recordStatus(host: host, resp?.statusCode ?? 0)
             html = decode(data, charsetHint: Self.charsetFromContentType(
                 (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")))
             if !AntiBot.isChallenge(status: resp?.statusCode ?? 0,

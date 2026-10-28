@@ -93,6 +93,52 @@ enum SelfCheck {
                 let h = LegadoConverter.parseHeader("Referer: https://a.com/\nUser-Agent: X")
                 return h["Referer"] == "https://a.com/" && h["User-Agent"] == "X"
             },
+
+            // ── 源级熔断（v194 新增：修「切源一直转圈」）─────────────────
+            // ⚠️ 每个用例都新建实例，绝不用 `SourceBreaker.shared` ——
+            //    否则自检会污染真实运行时的熔断状态（等于开机就把某个源跳过）。
+            Case(name: "熔断：2 次失败还不熔断") {
+                let b = SourceBreaker(limit: 3, cooldown: 120)
+                b.recordFailure("o", reason: .timeout)
+                b.recordFailure("o", reason: .timeout)
+                return b.shouldSkip("o") == nil && b.snapshot("o")?.failures == 2
+            },
+            Case(name: "熔断：连续 3 次失败 → 跳过") {
+                let b = SourceBreaker(limit: 3, cooldown: 120)
+                for _ in 0..<3 { b.recordFailure("o", reason: .timeout) }
+                return b.shouldSkip("o")?.failures == 3
+            },
+            Case(name: "熔断：成功后计数清零") {
+                let b = SourceBreaker(limit: 3, cooldown: 120)
+                for _ in 0..<3 { b.recordFailure("o", reason: .timeout) }
+                b.recordSuccess("o")
+                return b.shouldSkip("o") == nil && b.snapshot("o") == nil
+            },
+            Case(name: "熔断：冷却到期后放行（半开）") {
+                let b = SourceBreaker(limit: 3, cooldown: 0)
+                for _ in 0..<3 { b.recordFailure("o", reason: .timeout) }
+                return b.shouldSkip("o") == nil && b.snapshot("o")?.failures == 3
+            },
+            Case(name: "熔断：404 不计数（书下架 ≠ 源坏了）") {
+                let b = SourceBreaker(limit: 3, cooldown: 120)
+                for _ in 0..<5 { b.recordFailure("o", reason: .notFound) }
+                return b.snapshot("o") == nil
+            },
+            Case(name: "熔断：解析 0 条不计数") {
+                let b = SourceBreaker(limit: 3, cooldown: 120)
+                for _ in 0..<5 { b.recordFailure("o", reason: .ruleMiss) }
+                return b.snapshot("o") == nil
+            },
+            Case(name: "熔断：403 计数（被拦 = 源够不到）") {
+                let b = SourceBreaker(limit: 3, cooldown: 120)
+                for _ in 0..<3 { b.recordFailure("o", reason: .blocked) }
+                return b.shouldSkip("o") != nil
+            },
+            Case(name: "熔断：不同源互不影响") {
+                let b = SourceBreaker(limit: 3, cooldown: 120)
+                for _ in 0..<3 { b.recordFailure("a", reason: .timeout) }
+                return b.shouldSkip("a") != nil && b.shouldSkip("b") == nil
+            },
         ]
 
         var failed: [String] = []
