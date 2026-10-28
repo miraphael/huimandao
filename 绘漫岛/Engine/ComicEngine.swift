@@ -815,6 +815,20 @@ final class ComicEngine {
         // 🔎 插桩：栏目 URL、最终条目数 —— 「该栏目暂无内容」一看便知卡在哪
         DiagLog.event("find", "explore",
                       "栏目「\(column.title)」 url=\(DiagLog.safeURL(column.url)) → \(r.count) 条")
+
+        // 🔴 空栏目要**落成体检结论**（2026-10-28 成熟度改造）。
+        //    以前「0 条」只写进日志，界面永远是一句泛泛的「站点可能限流」。
+        //    现在把这次实测写进 `SourceHealth`（stage=列表），发现页空态就能显示
+        //    「该源的发现栏目规则已过期（站点改版），建议用搜索或换源」这类可执行的话。
+        //    注意：只在**真的为 0 条**时写，避免把正常的空页/末页也判成坏源。
+        if r.isEmpty, page == 1 {
+            let res = SourceCheckResult(
+                name: s.bookSourceName, sourceUrl: s.bookSourceUrl,
+                ok: false, ms: 0,
+                message: "发现栏目「\(column.title)」解析 0 条",
+                checked: true, stage: "列表", chapters: 0, images: 0)
+            _ = SourceHealth.mergeObserved([res])
+        }
         return r
     }
 

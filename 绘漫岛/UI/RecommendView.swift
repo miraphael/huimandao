@@ -153,10 +153,29 @@ struct RecommendView: View {
                         //    有 loginUrl 的源给出明确的引导动作，而不是让用户猜。
                         let needsLogin = selectedSource?.loginUrl?.isEmpty == false
                                      && selectedSource?.loginUrlResult?.isEmpty != false
+                        // 🔴 空态要说清「为什么空」（2026-10-28 成熟度改造）。
+                        //    以前只会说「站点可能限流或需要过验证」—— 但实测三类原因完全不同：
+                        //      · 规则过期（站点改版，列表解析 0）→ 换源/用搜索，重试没用
+                        //      · 站点不可达（域名解析失败）→ 换源
+                        //      · 需要过验证 → 点「手动过验证」
+                        //    体检过的源直接读 `SourceHealth` 的结论，没体检过才用通用文案。
+                        let health = selectedSource.flatMap {
+                            SourceHealth.state(sourceUrl: $0.bookSourceUrl)
+                        }
+                        let healthHint: String? = {
+                            guard let h = health else { return nil }
+                            if h.isChallenge { return "该源需要过人机验证 —— 到「图源」页点「手动过验证」过一次即可" }
+                            if h.state == "no_list" {
+                                return "该源的「发现栏目」规则已过期（站点改版），建议改用「搜索」找漫画，或换一个源"
+                            }
+                            if h.state == "dead" { return "该源站点当前不可达（域名解析失败或被墙），建议换源" }
+                            if h.state == "no_image" { return "该源正文图解析不到（图床或规则已失效），建议换源" }
+                            return nil
+                        }()
                         EmptyState(title: "该栏目暂无内容", systemImage: "sparkles",
                                    description: needsLogin
                                        ? "「\(selectedSource?.bookSourceName ?? "该图源")」需要先网页登录获取访问令牌，否则抓取会一直失败"
-                                       : "站点可能限流或需要过验证，点下面重试一次（会自动尝试内置浏览器过验证）",
+                                       : (healthHint ?? "可能是站点限流或网络波动，点下面重试一次（会自动尝试内置浏览器过验证）"),
                                    actionTitle: needsLogin ? "去网页登录" : "重新加载") {
                             if needsLogin { showLogin = true }
                             else { Task { await load(page: 1) } }

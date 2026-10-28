@@ -561,6 +561,8 @@ struct CoverImage: View {
     @State private var failed = false
     /// 网络波动时的自动重试（最多 1 次自动 + 手动无限次）
     @State private var attempt = 0
+    /// 失败原因（2026-10-28）：封面失败也要说清是「图床挂了」还是「网络不通」
+    @State private var reason: FailureReason = .unknown
 
     var body: some View {
         ZStack {
@@ -576,14 +578,22 @@ struct CoverImage: View {
                 Button {
                     attempt += 1
                 } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 15, weight: .semibold))
-                        Text("重试")
-                            .font(.system(size: 9))
+                    VStack(spacing: 3) {
+                        Image(systemName: reason.symbol)
+                            .font(.system(size: 14, weight: .semibold))
+                        // 原因优先于「重试」：封面小，只放得下 4~6 个字
+                        Text(reason.title)
+                            .font(.system(size: 8.5))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        if reason.isWorthRetrying {
+                            Text("点击重试")
+                                .font(.system(size: 8))
+                                .opacity(0.65)
+                        }
                     }
                     .foregroundStyle(.secondary)
-                    .padding(6)
+                    .padding(4)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -603,14 +613,21 @@ struct CoverImage: View {
     /// 共用的加载入口：先清失败态，成功记图，失败记 failed
     private func load() async {
         failed = false
-        let img = await Self.load(url: url, referer: referer, ua: ua)
-        image = img
-        failed = (img == nil && !url.isEmpty)
+        let r = await Self.loadResult(url: url, referer: referer, ua: ua)
+        image = r.image
+        reason = r.reason ?? .unknown
+        failed = (r.image == nil && !url.isEmpty)
     }
 
     /// 加载封面：主线程外完成 IO + 解码，避免长列表滚动掉帧。
     static func load(url: String, referer: String, ua: String) async -> UIImage? {
-        guard !url.isEmpty else { return nil }
+        await loadResult(url: url, referer: referer, ua: ua).image
+    }
+
+    /// 带失败原因的加载入口（封面失败页据此显示「图片地址失效 / 被站点拦截」）
+    static func loadResult(url: String, referer: String, ua: String)
+        async -> (image: UIImage?, reason: FailureReason?) {
+        guard !url.isEmpty else { return (nil, nil) }
         // 按域名反查图源，补齐 Referer / UA（很多站对封面做防盗链）
         var ref = referer
         var uag = ua
@@ -625,19 +642,21 @@ struct CoverImage: View {
         if !uag.isEmpty { hh["User-Agent"] = uag }
         guard let req = HMDImagePipeline.request(url: url, referer: ref, ua: uag, headers: hh) else {
             DiagLog.event("cover", "badurl", "封面地址无效：\(url.prefix(90))")
-            return nil
+            return (nil, .ruleMiss)
         }
         // ⚠️ `ImagePipeline.image(for:)` 直接返回 `PlatformImage`（= `UIImage`），
         //    **不是** `ImageResponse`，所以没有 `.image` 成员
         //    （写过会报 "value of type 'PlatformImage' has no member 'image'"）。
         //    返回类型是 `PlatformImage` 而非可选，成功即图片，失败则抛错。
         do {
-            return try await HMDImagePipeline.shared.image(for: req)
+            return (try await HMDImagePipeline.shared.image(for: req), nil)
         } catch {
-            // 诊断：封面为什么空 —— 记 host + 错误，别记完整 URL（可能带签名）
+            // 诊断：封面为什么空 —— 记 host + 错误 + 归因，别记完整 URL（可能带签名）
             let host = URL(string: url)?.host ?? "?"
-            DiagLog.event("cover", "fail", "\(host) 封面失败：\(error.localizedDescription)")
-            return nil
+            let why = FailureReason.from(error: error)
+            DiagLog.event("cover", "fail",
+                          "\(host) 封面失败[\(why.rawValue)]：\(error.localizedDescription)")
+            return (nil, why)
         }
     }
 }
