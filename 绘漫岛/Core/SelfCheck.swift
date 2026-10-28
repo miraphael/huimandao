@@ -208,6 +208,25 @@ enum SelfCheck {
                 return a != nil && !a!.isTrustworthy
                     && !ChapterKeyParser.alignable(a, ChapterKeyParser.parse("第12话"))
             },
+
+            // ── 发现栏目专用列表规则（tuku.cc 改版：栏目页与搜索页是两个 DOM）──
+            Case(name: "发现补丁：tuku 用新列表选择器且不改原对象") {
+                var s = ComicSource()
+                s.bookSourceUrl = "https://www.tuku.cc"
+                s.ruleSearchList = "class.manga-content-item"
+                let c = SourceContentPatch.sourceForExplore(s)
+                // 副本换成新选择器，原对象保持旧值（搜索页仍靠旧规则）
+                return c.ruleSearchList == "class.swiper-card-item"
+                    && s.ruleSearchList == "class.manga-content-item"
+            },
+            Case(name: "发现补丁：未登记的源原样返回") {
+                var s = ComicSource()
+                s.bookSourceUrl = "https://example.com"
+                s.ruleSearchList = "class.foo"
+                let c = SourceContentPatch.sourceForExplore(s)
+                return c.ruleSearchList == "class.foo"
+                    && c.ruleSearchName == s.ruleSearchName
+            },
         ]
 
         var failed: [String] = []

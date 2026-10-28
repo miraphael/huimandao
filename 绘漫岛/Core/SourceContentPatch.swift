@@ -18,6 +18,42 @@ enum SourceContentPatch {
     /// 只跑一次；以后要再补新规则时把版本号 +1。
     private static let flagKey = "patch.contentRules.v5"
 
+    // MARK: - 发现栏目专用列表规则（只影响 explore，不影响搜索）
+
+    /// 2026-10-28 实测：`tuku.cc` 改版后，**搜索页**仍是 `class.manga-content-item`
+    /// （实测 21 处），而**栏目页**（`/comics-pN/`、`/comics-tagN-pN/`、`/comics-orderN/`）
+    /// 换成了 `class.swiper-card-item`（每页 24 处，书名在 `class.card-item-title`，
+    /// 链接 `tag.a@href`，封面 `tag.img@data-original`）。
+    ///
+    /// `explore()` 复用**搜索规则**去解析栏目页 → 必然 0 条。
+    /// 真机日志实证：`html 29488 字，列表规则=class.manga-content-item` → `0 条`。
+    ///
+    /// 修法：给「发现」单独一套选择器，通过**复制一份 ComicSource** 传进 `browse`。
+    /// · **不动数据库**（不加字段、不做迁移，出问题回退一行代码即可）
+    /// · **不动搜索**（搜索页仍是旧 DOM，`ruleSearchList` 必须保留原值）
+    private static let findListOverrides: [String: (list: String, name: String,
+                                                     noteUrl: String, cover: String)] = [
+        "tuku.cc": (list: "class.swiper-card-item",
+                    name: "class.card-item-title@text",
+                    noteUrl: "tag.a@href",
+                    cover: "tag.img@data-original"),
+    ]
+
+    /// 给 `explore()` 用的源副本：只替换「列表 / 书名 / 链接 / 封面」四项。
+    ///
+    /// 没有登记的源**原样返回** —— 零开销、零行为变化。
+    static func sourceForExplore(_ s: ComicSource) -> ComicSource {
+        guard let host = URL(string: s.bookSourceUrl)?.host?.lowercased(),
+              let o = findListOverrides.first(where: { host.contains($0.key) })?.value
+        else { return s }
+        var copy = s
+        copy.ruleSearchList = o.list
+        copy.ruleSearchName = o.name
+        copy.ruleSearchNoteUrl = o.noteUrl
+        copy.ruleSearchCoverUrl = o.cover
+        return copy
+    }
+
     static func applyIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
 

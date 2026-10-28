@@ -849,7 +849,12 @@ final class ComicEngine {
         }
         // 🔴 自动登录：源配了 loginUrl 且没登录过 → 先自动跑一次隐藏 WebView 拿 token
         await AutoLogin.ensure(s)
-        let r = await browse(url: column.url, source: s, page: page, extraHeaders: column.headers)
+        // ⚠️ 用「发现专用」的源副本：有些站（tuku.cc）的**栏目页**和**搜索页**是两个 DOM，
+        //    而 explore 复用搜索规则解析栏目页 → 必然 0 条。
+        //    这里只替换列表四项，不动搜索、不动数据库。详见 `SourceContentPatch.sourceForExplore`。
+        let r = await browse(url: column.url,
+                             source: SourceContentPatch.sourceForExplore(s),
+                             page: page, extraHeaders: column.headers)
         // 🔎 插桩：栏目 URL、最终条目数 —— 「该栏目暂无内容」一看便知卡在哪
         DiagLog.event("find", "explore",
                       "栏目「\(column.title)」 url=\(DiagLog.safeURL(column.url)) → \(r.count) 条")
