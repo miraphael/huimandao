@@ -16,7 +16,7 @@ import Foundation
 enum SourceContentPatch {
 
     /// 只跑一次；以后要再补新规则时把版本号 +1。
-    private static let flagKey = "patch.contentRules.v4"
+    private static let flagKey = "patch.contentRules.v5"
 
     static func applyIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
@@ -49,6 +49,14 @@ enum SourceContentPatch {
                 s.ruleBookContent = book
                 applied = true
             }
+            // ④ 发现栏目：老规则指向已改版页面时整体替换（带条件，避免误伤用户改过的配置）
+            if let f = patch.find, (s.ruleFindUrl ?? "").contains(f.whenFindUrlContains) {
+                s.ruleFindUrl = f.findUrl
+                s.ruleSearchList = f.list
+                s.ruleSearchName = f.name
+                s.ruleSearchNoteUrl = f.noteUrl
+                applied = true
+            }
             guard applied else { continue }
             ComicRepository.shared.saveSource(s)
             changed.append(s.bookSourceName)
@@ -71,6 +79,18 @@ enum SourceContentPatch {
         var flowJSON: String? = nil
         /// 清掉历史遗留的**错误**规则（目前只有 W漫画 的 `tag.img@data-src`）
         var dropBadBook: String? = nil
+        /// 发现栏目补丁：老规则指向已改版的页面时整体换掉
+        var find: FindPatch? = nil
+    }
+
+    /// 发现栏目的一整套规则（列表 / 名称 / 链接 / 栏目地址）
+    private struct FindPatch {
+        var findUrl: String
+        var list: String
+        var name: String
+        var noteUrl: String
+        /// 只有当库里 `ruleFindUrl` 含这个子串时才替换（= 确认是老规则）
+        var whenFindUrlContains: String
     }
 
     private static let table: [Patch] = [
@@ -82,7 +102,18 @@ enum SourceContentPatch {
 
         // W漫画：`var num = eval("17")` + `var pasd = "…/"`
         // → 图片就是 pasd + i + ".webp"。HTML 里一个 <img src> 都没有。
-        Patch(host: "wmanhua.com", flowJSON: wmanhuaFlowJSON, dropBadBook: "tag.img@data-src"),
+        // W漫画 发现页：老规则 `ruleFindUrl` 指向 `/new`（时间线页，条目是 `a.timeline-item`、
+        // 封面用 CSS background-image，**没有 `<img>`**）→ 按搜索页规则解析必然 0 条。
+        // 实测 `/sort?page=N` 是标准卡片列表（`a.book` + `<h3>` 名称 + href 详情），
+        // 一页 24 本，翻页正常 → 发现栏目改指 /sort，并用 `||` 兼容搜索页的 `card-content`。
+        Patch(host: "wmanhua.com", flowJSON: wmanhuaFlowJSON,
+              dropBadBook: "tag.img@data-src",
+              find: FindPatch(
+                findUrl: "全部::https://www.wmanhua.com/sort?page={{page}}",
+                list: "class.card-content||class.book",
+                name: "class.cardtitle@text||tag.h3@text",
+                noteUrl: "tag.a@href||href",
+                whenFindUrlContains: "/new")),
 
         // 瓜子：正文图有独立 class，不配规则会被 8 张「推荐封面」污染
         Patch(host: "guazimanhua.com", book: "tag.img.reading-image@src"),
