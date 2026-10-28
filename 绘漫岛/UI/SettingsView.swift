@@ -215,6 +215,12 @@ struct SettingsView: View {
                 hairline
                 navRow("存储与诊断", detail: "缓存清理 · 诊断日志",
                        icon: "internaldrive.fill", color: .gray) { StorageDiagSettingsView() }
+                hairline
+                // 「两面」视觉底座的真机验收页（F1）。
+                // 只新增材质/令牌/翻面容器，不动任何业务界面 —— 但总得有地方看，
+                // 否则装到手机上找不到任何变化。正式版可收进开发者选项。
+                navRow("设计预览（开发）", detail: "两面 · 令牌 · 翻面",
+                       icon: "square.on.square", color: .pink) { DesignPreviewView() }
             }
             .padding(.vertical, 4)
         }

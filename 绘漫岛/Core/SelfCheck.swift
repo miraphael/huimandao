@@ -139,6 +139,75 @@ enum SelfCheck {
                 for _ in 0..<3 { b.recordFailure("a", reason: .timeout) }
                 return b.shouldSkip("a") != nil && b.shouldSkip("b") == nil
             },
+
+            // ── 章号归一化（v4「织」引擎的地基：跨源对齐的唯一依据）──────
+            // 这些用例全部取自 6 个图源真实出现过的写法。
+            // ⚠️ 这一组挂了 = 拼源会错页，比「打不开」严重得多。
+            Case(name: "章号：第12话 → 12") {
+                ChapterKeyParser.parse("第12话")?.no == 12
+            },
+            Case(name: "章号：第12話（繁体）→ 12") {
+                ChapterKeyParser.parse("第12話")?.no == 12
+            },
+            Case(name: "章号：Ch.12 → 12") {
+                ChapterKeyParser.parse("Ch.12")?.no == 12
+            },
+            Case(name: "章号：chapter 12 → 12") {
+                ChapterKeyParser.parse("chapter 12")?.no == 12
+            },
+            Case(name: "章号：#12 → 12") {
+                ChapterKeyParser.parse("#12")?.no == 12
+            },
+            Case(name: "章号：纯数字 12 → 12") {
+                ChapterKeyParser.parse("12")?.no == 12
+            },
+            Case(name: "章号：第十二话 → 12") {
+                ChapterKeyParser.parse("第十二话")?.no == 12
+            },
+            Case(name: "章号：第一百二十话 → 120") {
+                ChapterKeyParser.parse("第一百二十话")?.no == 120
+            },
+            Case(name: "章号：一千零一话 → 1001") {
+                ChapterKeyParser.parse("第一千零一话")?.no == 1001
+            },
+            Case(name: "章号：第12.5话 → 12.5") {
+                ChapterKeyParser.parse("第12.5话")?.no == 12.5
+            },
+            Case(name: "章号：全角 １２ 也能认") {
+                ChapterKeyParser.parse("第１２话")?.no == 12
+            },
+            Case(name: "章号：序章 → 0") {
+                ChapterKeyParser.parse("序章")?.no == 0
+            },
+            // 番外类必须落在负数区，否则「番外1」会排到「第1话」前面
+            Case(name: "章号：番外1 → 负数") {
+                (ChapterKeyParser.parse("番外1")?.no ?? 1) < 0
+            },
+            Case(name: "章号：番外2 与 外传1 不撞号") {
+                guard let a = ChapterKeyParser.parse("番外2")?.no,
+                      let b = ChapterKeyParser.parse("外传1")?.no else { return false }
+                return a < 0 && b < 0 && a != b
+            },
+            Case(name: "章号：第3卷第12话 → 取 12 不是 3") {
+                ChapterKeyParser.parse("第3卷第12话")?.no == 12
+            },
+            Case(name: "章号：Vol.3 Ch.12 不能串成 3") {
+                ChapterKeyParser.parse("Vol.3 Ch.12")?.no == 12
+            },
+            // 置信度闸门：不可靠的解析绝不能参与跨源对齐
+            Case(name: "对齐：两个可信且同号 → 可对齐") {
+                ChapterKeyParser.alignable(ChapterKeyParser.parse("第12话"),
+                                           ChapterKeyParser.parse("Ch.12"))
+            },
+            Case(name: "对齐：番外与正文同数字 → 不可对齐") {
+                !ChapterKeyParser.alignable(ChapterKeyParser.parse("番外1"),
+                                            ChapterKeyParser.parse("第1话"))
+            },
+            Case(name: "对齐：低置信（含年份）→ 不可对齐") {
+                let a = ChapterKeyParser.parse("2024年12月更新")
+                return a != nil && !a!.isTrustworthy
+                    && !ChapterKeyParser.alignable(a, ChapterKeyParser.parse("第12话"))
+            },
         ]
 
         var failed: [String] = []
