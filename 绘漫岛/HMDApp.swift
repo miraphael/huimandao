@@ -82,13 +82,19 @@ struct HMDApp: App {
                 let shortVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?"
                 let buildVer = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
                 DiagLog.event("app", "version",
-                              "构建指纹 build-191-honest · App 版本 \(shortVer) (\(buildVer))")
+                              "构建指纹 build-192-selftest · App 版本 \(shortVer) (\(buildVer))")
 
                 // 🔴 一次性数据补丁：给内置图源补**正文图规则**。
                 //    真因：图源 JSON 写的是 `ruleContentList`，模型里没这个字段 →
                 //    解码时被静默丢弃 → 引擎只能扫 `<img>` → JS 生成图的站白屏。
                 //    只补空字段，用户自己配过规则的不动；跑一次就置 flag。
                 SourceContentPatch.applyIfNeeded()
+
+                // 🔎 纯逻辑自检（2026-10-28）：后台跑一组断言，结果写 `[selftest]`。
+                //    本项目还没有单元测试，两天内连续栽在 `{{page}}` 编码、
+                //    `ruleContentList` 字段名、`Referer: -` 字面量这三类**纯函数错误**上。
+                //    这一步零成本（不加 target、不动 CI），但能保证「改坏了日志立刻看得见」。
+                Task.detached(priority: .utility) { SelfCheck.run() }
             }
         }
     }

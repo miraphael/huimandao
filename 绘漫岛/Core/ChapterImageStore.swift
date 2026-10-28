@@ -165,6 +165,9 @@ final class ChapterImageStore: ObservableObject {
     /// 后面的页直接标失败，不再逐页发请求（包子实测：18 页 × 2 次重试 = 20 秒白等）。
     private var consecutiveNotFound = 0
     private static let notFoundBreakLimit = 3
+    /// 已经上报过「图床失效」的源（每个源每次启动只报一次，避免刷爆体检文件）
+    private static var reportedBrokenHosts = Set<String>()
+    private static let reportLock = NSLock()
     private var _urls: [String]
     /// 每个 index 对应的在飞任务。用 Task 而不是 Bool 标记：
     /// 后来者直接 await 同一个 Task，不再轮询等待。
@@ -927,6 +930,7 @@ final class ChapterImageStore: ObservableObject {
         lock.lock(); let broken = consecutiveNotFound >= Self.notFoundBreakLimit; lock.unlock()
         if broken {
             setFailed(index, .notFound)
+            reportBrokenImageHostOnce()
             return nil
         }
         // 日志里去掉 query（可能带 token），只留路径便于判断
@@ -1075,6 +1079,29 @@ final class ChapterImageStore: ObservableObject {
         lock.unlock()
         setFailed(index, lastReason)
         return nil
+    }
+
+    /// 图床连续 404 → 把结论写进 `SourceHealth`，图源页会显示「正文 0 图」徽章。
+    ///
+    /// 意义：包子这类**整站图床失效**的源，用户在图源页一眼就能看到"这个源坏了"，
+    /// 而不是打开章节、看到 18 页「图片地址失效」才知道。
+    /// 每个源每次启动只报一次（静态去重），避免每章都写一次体检文件。
+    private func reportBrokenImageHostOnce() {
+        guard !origin.isEmpty else { return }
+        Self.reportLock.lock()
+        let already = Self.reportedBrokenHosts.contains(origin)
+        if !already { Self.reportedBrokenHosts.insert(origin) }
+        Self.reportLock.unlock()
+        guard !already, let s = ComicRepository.shared.source(url: origin) else { return }
+
+        let res = SourceCheckResult(
+            name: s.bookSourceName, sourceUrl: s.bookSourceUrl,
+            ok: false, ms: 0,
+            message: "正文图连续 \(Self.notFoundBreakLimit) 页 404（图床失效）",
+            checked: true, stage: "正文", chapters: 0, images: 0, probedContent: true)
+        _ = SourceHealth.mergeObserved([res])
+        DiagLog.event("img", "host",
+                      "图床失效已记入体检：\(s.bookSourceName)（图源页会显示「正文 0 图」）")
     }
 
     /// 把 Nuke 的 `ImagePipeline.Error` 翻成可读文本（带上底层错误码）。
