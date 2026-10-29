@@ -214,49 +214,84 @@ struct RecommendView: View {
             }
             .navigationBarHidden(true)
             .onAppear { bootstrap() }
+            // 🔴 图源页改了开关 / 导入了新源 / 删了源 → 漫画台**实时同步**
+            .onReceive(NotificationCenter.default.publisher(for: .hmdSourcesChanged)) { _ in
+                reloadSources()
+            }
         }
     }
 
-    private func bootstrap() {
-        if sources.isEmpty {
-            // 去重：同一 URL 只留一个（重复导入包时防 SwiftUI ForEach 重复 ID 崩溃）
-            var seen = Set<String>()
-            let enabled = ComicRepository.shared.allSources(includeDisabled: false)
-            let withFind = enabled.filter { !($0.ruleFindUrl ?? "").isEmpty }
-            var usable = withFind.filter { $0.isExploreEnabled }
-                .filter { seen.insert($0.bookSourceUrl).inserted }
+    private func bootstrap() { reloadSources() }
 
-            // 🩹 自愈：有栏目却一个都不可用 → 说明「发现开关」被误关（导入的源常见），
-            //    自动打开并把原因记进日志，别让用户面对一片空白。
-            if usable.isEmpty && !withFind.isEmpty {
-                ComicRepository.shared.setExploreEnabled(urls: withFind.map(\.bookSourceUrl), enable: true)
-                seen.removeAll()
-                usable = withFind.filter { seen.insert($0.bookSourceUrl).inserted }
-                DiagLog.event("recommend", "selfheal",
-                              "有 \(withFind.count) 个源配了发现栏目但开关全关 → 已自动打开")
-            }
-            sources = usable
-            if usable.isEmpty {
-                if enabled.isEmpty {
-                    emptyReason = "还没有启用的图源"
-                } else if withFind.isEmpty {
-                    emptyReason = "\(enabled.count) 个图源都没有配置「发现栏目」"
-                } else {
-                    emptyReason = "图源暂时不可用"
-                }
-            } else {
-                emptyReason = ""
-            }
-            DiagLog.event("recommend", "sources",
-                          "启用 \(enabled.count) · 有栏目 \(withFind.count) · 可用 \(usable.count)")
-            if selectedSource == nil {
-                // 默认漫画台；其次记住的上次选择；最后第一个
-                let preferred = sources.first(where: { $0.bookSourceUrl == lastSourceUrl })
-                    ?? sources.first(where: { $0.bookSourceName.contains("漫画台") })
-                    ?? sources.first
-                switchSource(preferred)
-            }
+    /// 重新计算「漫画台可用图源」并同步到界面。
+    ///
+    /// 🔴 **必须能被 `.hmdSourcesChanged` 触发**（2026-10-29 用户实测：
+    ///    「图源关闭之后漫画台那边的切换应该也实时关闭；加入新的也应该实时显示」）。
+    ///
+    ///    旧实现整个包在 `if sources.isEmpty` 里，只在**首次** onAppear 算一次 ——
+    ///    之后无论在图源页怎么开关、怎么导入新源，漫画台的源列表永远不变。
+    ///    这是「数据源变了但界面不认」的典型：**一次性初始化 ≠ 响应式同步**。
+    private func reloadSources() {
+        // 去重：同一 URL 只留一个（重复导入包时防 SwiftUI ForEach 重复 ID 崩溃）
+        var seen = Set<String>()
+        let enabled = ComicRepository.shared.allSources(includeDisabled: false)
+        let withFind = enabled.filter { !($0.ruleFindUrl ?? "").isEmpty }
+        var usable = withFind.filter { $0.isExploreEnabled }
+            .filter { seen.insert($0.bookSourceUrl).inserted }
+
+        // 🩹 自愈：有栏目却一个都不可用 → 说明「发现开关」被误关（导入的源常见），
+        //    自动打开并把原因记进日志，别让用户面对一片空白。
+        if usable.isEmpty && !withFind.isEmpty {
+            ComicRepository.shared.setExploreEnabled(urls: withFind.map(\.bookSourceUrl), enable: true)
+            seen.removeAll()
+            usable = withFind.filter { seen.insert($0.bookSourceUrl).inserted }
+            DiagLog.event("recommend", "selfheal",
+                          "有 \(withFind.count) 个源配了发现栏目但开关全关 → 已自动打开")
         }
+
+        let previous = selectedSource?.bookSourceUrl
+        sources = usable
+        DiagLog.event("recommend", "sources",
+                      "启用 \(enabled.count) · 有栏目 \(withFind.count) · 可用 \(usable.count)"
+                      + (previous.map { " · 当前 \($0)" } ?? ""))
+
+        // ── 一个可用的都没有 ──
+        guard !usable.isEmpty else {
+            emptyReason = enabled.isEmpty
+                ? "还没有启用的图源"
+                : (withFind.isEmpty ? "\(enabled.count) 个图源都没有配置「发现栏目」" : "图源暂时不可用")
+            prefetchTask?.cancel()
+            selectedSource = nil
+            selectedColumn = nil
+            columns = []
+            items = []
+            return
+        }
+        emptyReason = ""
+
+        // ── 当前选中的源还在 → 保留（换成新对象：规则可能刚被补丁/导入改过）──
+        if let previous, let same = usable.first(where: { $0.bookSourceUrl == previous }) {
+            let oldURLs = columns.map(\.url)
+            selectedSource = same
+            let cols = ComicEngine.shared.findColumns(sources: [same])
+            columns = cols
+            if cols.map(\.url) != oldURLs {
+                // 栏目规则变了 → 重选栏目并重新加载
+                selectedColumn = cols.first
+                Task { await load(page: 1) }
+            }
+            return
+        }
+
+        // ── 当前源被关掉 / 首次进入 → 换一个 ──
+        let preferred = usable.first(where: { $0.bookSourceUrl == lastSourceUrl })
+            ?? usable.first(where: { $0.bookSourceName.contains("漫画台") })
+            ?? usable.first
+        if previous != nil {
+            DiagLog.event("recommend", "sources",
+                          "当前源已不可用（\(previous ?? "-")）→ 自动切到 \(preferred?.bookSourceName ?? "无")")
+        }
+        switchSource(preferred)
     }
 
     private func switchSource(_ s: ComicSource?) {

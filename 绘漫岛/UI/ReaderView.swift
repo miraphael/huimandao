@@ -22,6 +22,10 @@ struct ReaderView: View {
 
     @State private var zoomed = false
     @State private var showSettings = false
+    /// 占用「隐藏底栏」的唯一 token —— 见 `ShellBarState`。
+    /// 用 token 而不是布尔值：阅读器被 SwiftUI 重建时，旧实例的 onDisappear
+    /// 只会撤掉自己的占用，不会把新实例刚隐藏的底栏又放出来。
+    @State private var barOwner = UUID().uuidString
     @State private var showMenu = false
     /// 章节列表（选章）面板 —— 阅读中想换章时随时可达。
     @State private var showChapterList = false
@@ -255,8 +259,8 @@ struct ReaderView: View {
         }
         .toolbar(.hidden, for: .tabBar)
         // 自绘底栏（AppShellView）也要跟着隐藏 —— 阅读必须全屏沉浸
-        .onAppear { ShellBarState.shared.hidden = true }
-        .onDisappear { ShellBarState.shared.hidden = false }
+        .onAppear { ShellBarState.shared.hide(owner: barOwner) }
+        .onDisappear { ShellBarState.shared.restore(owner: barOwner) }
         // 阅读器恒定深色 → 导航栏也用深色配色，标题/按钮才看得见。
         // ⚠️ 故意**不用** `.preferredColorScheme(.dark)`：那会改整个 window 的深浅色，
         //    进/出阅读器时全 App 闪一下颜色 —— 正是我们要修的「打开/离开闪一下」。

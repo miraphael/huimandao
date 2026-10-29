@@ -300,6 +300,35 @@ enum SelfCheck {
                 !AntiBot.isChallenge(status: 200, headers: [:],
                                      body: "<html><body>正常漫画列表</body></html>")
             },
+
+            // ── 底栏占用（2026-10-29「打开漫画后底栏又冒出来」）────────────
+            //
+            // 旧实现是 `hidden: Bool`，阅读器 onAppear 置 true / onDisappear 置 false。
+            // SwiftUI 重复触发回调时，多一次 onDisappear 就把底栏放出来了。
+            // 现在用「占用者 token 集合」，这两条锁住关键行为。
+            Case(name: "底栏：重复 hide/restore 幂等") {
+                let b = ShellBarState()
+                b.hide(owner: "reader")
+                b.hide(owner: "reader")     // 重复 onAppear
+                let hid = b.hidden
+                b.restore(owner: "reader")
+                b.restore(owner: "reader")  // 重复 onDisappear
+                return hid && !b.hidden
+            },
+            Case(name: "底栏：旧实例退出不影响新实例") {
+                let b = ShellBarState()
+                b.hide(owner: "old")
+                b.hide(owner: "new")        // 阅读器被重建，新实例占位
+                b.restore(owner: "old")     // 旧实例 onDisappear 迟到
+                return b.hidden             // 新实例还在阅读 → 必须保持隐藏
+            },
+            Case(name: "底栏：reset 强制恢复") {
+                let b = ShellBarState()
+                b.hide(owner: "a")
+                b.hide(owner: "b")
+                b.reset()
+                return !b.hidden
+            },
         ]
 
         var failed: [String] = []

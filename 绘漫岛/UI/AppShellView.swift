@@ -40,9 +40,41 @@ enum ShellPage: String, CaseIterable, Identifiable {
 }
 
 /// 底栏显隐的全局开关：阅读器要**全屏沉浸**，进入时隐藏底栏。
+///
+/// ## 为什么用「占用者集合」而不是一个布尔值（2026-10-29 用户实测「打开漫画后
+/// 底栏又冒出来了」）
+///
+/// 原来的实现是 `hidden: Bool`，阅读器 `onAppear` 置 true、`onDisappear` 置 false。
+/// 但 SwiftUI **可能重复触发**这两个回调（视图身份变化、重新布局、
+/// `@State` 批量更新时都可能）。只要多来一次 `onDisappear`，布尔值就被打成 false
+/// —— 用户正在看漫画，底栏凭空出现。
+///
+/// 用「占用者 token 集合」：
+/// · 每个阅读器实例有唯一 token，`hide(owner:)` 是幂等的（重复调用无副作用）
+/// · 旧实例的 `restore(owner:)` 只移除**自己**的 token
+///   —— 新实例已经占位时，集合非空，底栏仍然保持隐藏
 final class ShellBarState: ObservableObject {
     static let shared = ShellBarState()
-    @Published var hidden = false
+
+    private var owners: Set<String> = []
+
+    @Published private(set) var hidden = false
+
+    func hide(owner: String) {
+        owners.insert(owner)
+        if !hidden { hidden = true }
+    }
+
+    func restore(owner: String) {
+        owners.remove(owner)
+        if owners.isEmpty, hidden { hidden = false }
+    }
+
+    /// 兜底：切页 / 回前台时强制恢复（防止 onDisappear 压根没触发导致底栏永久消失）
+    func reset() {
+        owners.removeAll()
+        if hidden { hidden = false }
+    }
 }
 
 struct AppShellView: View {
@@ -65,11 +97,11 @@ struct AppShellView: View {
         //    阅读器用 `hidden` 隐藏底栏，万一 onDisappear 没触发（SwiftUI 偶发），
         //    底栏会永久消失。这两条兜底把它拉回来。
         .onChange(of: page) { _ in
-            ShellBarState.shared.hidden = false
+            ShellBarState.shared.reset()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.willEnterForegroundNotification)) { _ in
-            ShellBarState.shared.hidden = false
+            ShellBarState.shared.reset()
         }
         .onAppear {
             DiagLog.event("shell", "bar", "底栏出现（hidden=\(bar.hidden)）")
