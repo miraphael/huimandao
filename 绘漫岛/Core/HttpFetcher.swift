@@ -120,29 +120,62 @@ final class HttpFetcher {
         directSession = URLSession(configuration: dcfg)
     }
 
-    /// 按「域名路由策略」发一次请求：已知直连可用就走直连，否则先试系统配置。
-    /// 失败时自动切换另一条通道，并把结果记下来供下次直接选对。
+    /// 按「域名路由策略」发一次请求 —— **对冲（Happy Eyeballs）**。
+    ///
+    /// 🔴 为什么改（2026-10-29 真机定位）：
+    ///    用户报「打开漫画台很久、详情一直显示正在读取章节」。日志里
+    ///    `①详情HTML就绪` 出现 **25.5s / 18.3s / 13.8s** 的毛刺，而同一次会话里
+    ///    384KB 的页面只要 1.3s —— 说明卡的不是带宽，而是**第一条通道的等待**。
+    ///
+    ///    旧实现是**串行**两条通道：第一条卡住 → 等它彻底超时（会话 60s）→ 才发第二条。
+    ///    一条死通道就能把每次抓取拖到分钟级，而 UI 上只显示一个转圈。
+    ///
+    ///    新实现：第一条立刻发；`hedgeDelay` 秒后若仍没结果，第二条**并行**发出，
+    ///    谁先拿到非空数据就用谁。正常站点（第一条 300ms 返回）**行为完全不变** ——
+    ///    第二条根本不会发出去，不会多消耗任何流量。
     private func performWithRoute(_ req: URLRequest, host: String) async -> (Data, URLResponse?) {
         let known = NetRoute.decision(host)
         // 未知时**先直连** —— 国内图源占多数，直连成功率高且少一次绕行
         let preferDirect = (known ?? true)
-        let first = preferDirect ? directSession : session
-        let second = preferDirect ? session : directSession
-        do {
-            let (d, r) = try await first.data(for: req)
-            if !d.isEmpty {
-                NetRoute.record(host, direct: preferDirect)
-                return (d, r)
+        let firstSession = preferDirect ? directSession : session
+        let secondSession = preferDirect ? session : directSession
+
+        return await withCheckedContinuation { (cont: CheckedContinuation<(Data, URLResponse?), Never>) in
+            let gate = RaceGate(attempts: 2)
+
+            // ① 主通道：立刻发
+            Task {
+                let (d, r) = await Self.attempt(firstSession, req: req)
+                if !d.isEmpty, gate.claim() {
+                    NetRoute.record(host, direct: preferDirect)
+                    cont.resume(returning: (d, r))
+                    return
+                }
+                if gate.fail() { cont.resume(returning: (Data(), nil)) }
             }
-        } catch { /* 落到第二条通道 */ }
-        do {
-            let (d, r) = try await second.data(for: req)
-            if !d.isEmpty {
-                NetRoute.record(host, direct: !preferDirect)
-                return (d, r)
+
+            // ② 备用通道：等一个对冲窗口再发（主通道已成功则直接放弃）
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(Self.hedgeDelay * 1_000_000_000))
+                if gate.isSettled { return }
+                let (d, r) = await Self.attempt(secondSession, req: req)
+                if !d.isEmpty, gate.claim() {
+                    NetRoute.record(host, direct: !preferDirect)
+                    cont.resume(returning: (d, r))
+                    return
+                }
+                if gate.fail() { cont.resume(returning: (Data(), nil)) }
             }
-        } catch { }
-        return (Data(), nil)
+        }
+    }
+
+    /// 对冲窗口：主通道超过这个时间还没回来，就同时打备用通道。
+    /// 0.3s 返回的正常站点永远不会触发它；卡住的通道最多白等这么久。
+    private static let hedgeDelay: TimeInterval = 3.5
+
+    /// 单次通道尝试 —— 失败一律折成空 Data，由上层决定要不要用另一条通道。
+    private static func attempt(_ s: URLSession, req: URLRequest) async -> (Data, URLResponse?) {
+        do { return try await s.data(for: req) } catch { return (Data(), nil) }
     }
 
     func fetchText(_ url: String, method: String = "GET", body: String? = nil, headers: [String: String] = [:], timeout: TimeInterval? = nil) async -> String {
@@ -672,5 +705,44 @@ enum CookieStore {
                 set(host: host, name: bits[0].trimmingCharacters(in: .whitespaces), value: bits[1].trimmingCharacters(in: .whitespaces))
             }
         }
+    }
+}
+
+// MARK: - 对冲请求的闸门
+
+/// 两条通道抢同一个 `CheckedContinuation` 的闸门。
+///
+/// 唯一职责：保证 `withCheckedContinuation` **只被 resume 一次**。
+/// 双通道并发时，两边可能同时成功/同时失败，没有闸门就是
+/// "SWIFT TASK CONTINUATION MISUSE: tried to resume its continuation more than once"，
+/// 运行时直接崩。
+///
+/// 状态机只有三个：
+///   · `claim()` —— 抢到「我来给成功结果」的权利（只有一个能抢到）
+///   · `fail()`  —— 报告一次失败；返回 true 表示「我是最后一个失败者，由我收尾」
+///   · `isSettled` —— 备用通道睡醒后先看一眼，已经出结果就不必再打一次请求
+private final class RaceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var settled = false
+    private var remaining: Int
+
+    init(attempts: Int) { remaining = attempts }
+
+    var isSettled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return settled
+    }
+
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if settled { return false }
+        settled = true
+        return true
+    }
+
+    func fail() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        remaining -= 1
+        return remaining <= 0 && !settled
     }
 }

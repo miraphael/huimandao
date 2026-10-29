@@ -93,7 +93,8 @@ struct ComicDetailView: View {
                 }
                 if let info {
                     HStack(alignment: .top, spacing: 12) {
-                        CoverImage(url: info.coverUrl)
+                        // 传 origin 当 Referer：独立图床（卡拉/瓜子）不带就 403
+                        CoverImage(url: info.coverUrl, referer: info.origin)
                             .grayscale(isManga ? 1 : 0)
                             .frame(width: 110, height: 152)
                             .clipShape(RoundedRectangle(cornerRadius: isManga ? 0 : 8))

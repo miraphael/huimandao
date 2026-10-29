@@ -235,6 +235,29 @@ enum SelfCheck {
                 let c = SourceContentPatch.sourceForExplore(s)
                 return c.ruleSearchList == s.ruleSearchList
             },
+
+            // ── 封面 Referer 归一化（2026-10-29 真机：瓜子封面全 403）────────
+            //
+            // 瓜子图床对 Referer 做**严格前缀匹配**，少一个尾斜杠就判盗链：
+            //   `https://www.guazimanhua.com`  → 403 / 4548B
+            //   `https://www.guazimanhua.com/` → 200 / 118KB
+            // 而 `bookSourceUrl` 存的正是**无尾斜杠**的形式 → 该源封面永远 403。
+            Case(name: "Referer：裸源站补尾斜杠") {
+                HMDImagePipeline.normalizedReferer("https://www.guazimanhua.com")
+                    == "https://www.guazimanhua.com/"
+            },
+            Case(name: "Referer：带路径的原样保留") {
+                let r = "https://www.tuku.cc/comics-p1/"
+                return HMDImagePipeline.normalizedReferer(r) == r
+            },
+            // Legado 里 `-` = 显式不带 Referer。原样发 `Referer: -` 会 403 / 4548B
+            // （瓜子实测），必须映射成空串 —— 空串在 request() 里表示「不设这个头」。
+            Case(name: "Referer：`-` 视为不发送") {
+                HMDImagePipeline.normalizedReferer("-").isEmpty
+            },
+            Case(name: "Referer：空串仍为空") {
+                HMDImagePipeline.normalizedReferer("   ").isEmpty
+            },
         ]
 
         var failed: [String] = []

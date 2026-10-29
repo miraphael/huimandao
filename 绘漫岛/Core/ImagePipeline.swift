@@ -173,6 +173,34 @@ enum HMDImagePipeline {
     /// ⚠️ 这些头必须加在 **URLRequest** 上而不是 `ImageRequest` 的属性上：
     ///    Nuke 只透传 `URLRequest` 的自定义头；`ImageRequest.userAgent` 是给
     ///    URLSession 层用的，部分站的 Referer 校验只看 URLRequest。
+    /// Referer 归一化 —— 把「裸源站地址」补成带尾斜杠的形式。
+    ///
+    /// 为什么必须做（2026-10-29 实测，四种组合逐一验证）：
+    /// ```
+    /// 瓜子 img.guazicdn.com：
+    ///   Referer = https://www.guazimanhua.com   → 403 / 4548B   ← 源里存的就是这个
+    ///   Referer = https://www.guazimanhua.com/  → 200 / 118KB
+    ///   不带 Referer                            → 200
+    /// ```
+    /// 站点做的是**字符串前缀匹配**（`hasPrefix("https://www.guazimanhua.com/")`），
+    /// 少一个 `/` 就判为盗链。`bookSourceUrl` 恰恰是不带尾斜杠的。
+    ///
+    /// 而卡拉 `image.kalaimg.top` 相反：**不带** Referer 就 403 —— 所以「干脆不传」不是解。
+    /// 正确做法是：有 Referer 就补成规范形式，没有才不发。
+    ///
+    /// `-` 是 Legado 里「显式要求不带 Referer」的写法（漫画网就靠它绕开防盗链），
+    /// 必须映射成空串，绝不能原样发 `Referer: -`（那会 403 / 4548B）。
+    static func normalizedReferer(_ raw: String) -> String {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty || t == "-" { return "" }
+        guard var comp = URLComponents(string: t), comp.scheme != nil, comp.host != nil else {
+            return t
+        }
+        // 只有「裸源站」才补斜杠；带路径的 Referer 是站点精确要求的，不能动
+        if comp.path.isEmpty { comp.path = "/" }
+        return comp.url?.absoluteString ?? t
+    }
+
     static func request(url: String, referer: String = "", ua: String = "",
                         headers: [String: String] = [:],
                         priority: ImageRequest.Priority = .normal) -> ImageRequest? {
@@ -183,10 +211,26 @@ enum HMDImagePipeline {
         guard let u = comp.url else { return nil }
 
         var req = URLRequest(url: u)
-        if !referer.isEmpty { req.setValue(referer, forHTTPHeaderField: "Referer") }
+        // 🔴 Referer 必须归一化 —— 2026-10-29 真机定位到的封面 403 真因：
+        //    瓜子图床 `img.guazicdn.com` 对 Referer 做的是**严格前缀匹配**，
+        //    `Referer: https://www.guazimanhua.com`（无尾斜杠）→ **403 / 4548 字节**，
+        //    加一个 `/` → 200 / 118KB。实测四种组合确认过：
+        //      Chrome62 + 无斜杠 = 403 ｜ Chrome62 + 有斜杠 = 200
+        //      iPhone   + 无斜杠 = 403 ｜ 不带 Referer   = 200
+        //    而 `bookSourceUrl` 存的就是**无尾斜杠**的形式，于是该源封面**永远 403**。
+        //    （卡拉 `image.kalaimg.top` 反过来：不带 Referer 就 403 —— 所以两个方向都要对。）
+        let ref = Self.normalizedReferer(referer)
+        if !ref.isEmpty { req.setValue(ref, forHTTPHeaderField: "Referer") }
         if !ua.isEmpty { req.setValue(ua, forHTTPHeaderField: "User-Agent") }
-        // 规则头优先级最高（可覆盖上面的默认值）
-        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        // 规则头优先级最高（可覆盖上面的默认值）—— Referer 也要归一化后再写
+        for (k, v) in headers {
+            let value = k.lowercased() == "referer" ? Self.normalizedReferer(v) : v
+            if k.lowercased() == "referer", value.isEmpty {
+                req.setValue(nil, forHTTPHeaderField: "Referer")
+            } else {
+                req.setValue(value, forHTTPHeaderField: k)
+            }
+        }
 
         // ── 反反爬：图片请求也必须带 Cookie / 过挑战后的 UA ──────────────────
         // ⚠️ 这是「页面能打开、图片全是 403」的常见原因：`cf_clearance` 是

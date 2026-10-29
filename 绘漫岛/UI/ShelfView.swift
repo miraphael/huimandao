@@ -488,7 +488,7 @@ struct MangaShelfCell: View {
         ZStack(alignment: .topTrailing) {
             // 格子已经是 2:3，`scaledToFill` 正好铺满 —— 不裁切、不缩小。
             // （之前用 fit: true 是为了「显示完整」，但那会让 2:3 封面在宽格子里缩水）
-            CoverImage(url: item.coverUrl)
+            CoverImage(url: item.coverUrl, referer: item.origin)
                 .grayscale(1)
                 .frame(maxWidth: .infinity)
                 .frame(height: panelHeight)

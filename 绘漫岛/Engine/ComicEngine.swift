@@ -1065,6 +1065,20 @@ final class ComicEngine {
         //    表现为「有响应但解析 0 条」——极难从现象反推原因。
         var reqHeaders: [String: String] = Self.sourceHeaders(s, referer: origin)
         for (k, v) in extraHeaders { reqHeaders[k] = v }
+
+        // ── 章节 API 与详情 HTML **并行**（2026-10-29）────────────────────
+        // W漫画这类站，章节全量只能靠 `POST /comic/{id}` 拿（详情页只渲染最近 24 章）。
+        // 旧实现是「等 HTML 回来 → 解析章节 → 再串行打 API」，
+        // 真机日志实测：25.5s（HTML）+ 6s（API）= 用户盯着「正在读取章节」三十秒。
+        //
+        // 而 API 地址只需要 `noteUrl` 里的数字，**完全不必等页面** —— 提前并发发出，
+        // 章节最迟在 API 返回那一刻就有了，不再叠加在 HTML 之后。
+        //
+        // ⚠️ 用非结构化 `Task` 而不是 `async let`：
+        //    `async let` 在提前 return 的分支会被**隐式 await**（Swift 的隐式取消/等待语义），
+        //    失败路径反而被拖住。这里让它自生自灭 —— 结果会被 ResponseCache 缓存住，
+        //    下次进来直接命中。
+        let apiChaptersTask = Task { await self.chaptersFromApi(s, noteUrl: noteUrl, headers: reqHeaders) }
         // ⚠️ 这里不要收窄超时：详情页取不到 HTML 会直接返回空 info，
         // 表现出来就是「简介打不开 + 章节解析为 0」，很容易被误判成解析规则的问题。
         // 沿用全局 60s，并在首次为空时重试一次（慢站首包偶尔会超时）。
@@ -1320,7 +1334,9 @@ final class ComicEngine {
             // 🔴 **章节 API 覆盖**（2026-10-18）：很多站详情页只渲染最近 20~30 章，
             //    「加载更多」是 POST 一个 JSON 接口（W漫画：POST /comic/{id}）。
             //    只有拿到**更多**章节时才覆盖，避免 API 抽风把正常结果改坏。
-            let apiChapters = await chaptersFromApi(s, noteUrl: noteUrl, headers: reqHeaders)
+            // ⚠️ 这个 Task 在抓 HTML **之前**就发出了（见上面的 apiChaptersTask），
+            //    这里只是取结果 —— 慢站省掉「HTML 之后又等 6 秒」。
+            let apiChapters = await apiChaptersTask.value
             if apiChapters.count > info.chapters.count {
                 DiagLog.event("detail", "chapterApi",
                               "用章节 API 覆盖：\(info.chapters.count) → \(apiChapters.count) 章")
@@ -1503,8 +1519,17 @@ final class ComicEngine {
             : s.bookSourceUrl + api.replacingOccurrences(of: "{id}", with: digits)
         var h = headers
         h["Content-Type"] = "application/json"
-        let resp = await HttpFetcher.shared.fetchText(apiUrl, method: "POST", body: "{}",
-                                                      headers: h, timeout: 20)
+        // 🔴 **必须缓存**（2026-10-29 真机定位）：
+        //    一次进详情会调**两次** `detail()`（①首屏 skipPagination + ②补全），
+        //    而两次都会走到这里 —— 真机日志里 W漫画 的这条 API 每次 6 秒，
+        //    补全阶段等于**白等 6 秒**（结果和首屏一模一样，33 章 → 33 章未替换）。
+        //    缓存 10 分钟后：同一本书短时间内反复进出详情是零网络。
+        //    ⚠️ key 里带 bookSourceUrl：不同源可能有相同的 `/comic/{id}` 路径。
+        let apiCacheKey = "chapterapi|\(s.bookSourceUrl)|\(apiUrl)"
+        let resp = await ResponseCache.shared.cached(key: apiCacheKey, ttl: 600) {
+            await HttpFetcher.shared.fetchText(apiUrl, method: "POST", body: "{}",
+                                              headers: h, timeout: 20)
+        } ?? ""
         guard let root = JsonPath.parse(resp) else {
             DiagLog.event("detail", "chapterApi", "响应不是 JSON：\(DiagLog.safeURL(apiUrl))")
             return []

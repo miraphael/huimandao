@@ -454,7 +454,7 @@ struct HistoryView: View {
                                  prefillName: h.name, prefillCover: h.coverUrl)
             } label: {
                 HStack {
-                    CoverImage(url: h.coverUrl).frame(width: 44, height: 60).clipShape(RoundedRectangle(cornerRadius: 5))
+                    CoverImage(url: h.coverUrl, referer: h.origin).frame(width: 44, height: 60).clipShape(RoundedRectangle(cornerRadius: 5))
                     VStack(alignment: .leading) {
                         Text(h.name).lineLimit(1)
                         Text(Date(timeIntervalSince1970: TimeInterval(h.upTime) / 1000).formatted(.dateTime))
