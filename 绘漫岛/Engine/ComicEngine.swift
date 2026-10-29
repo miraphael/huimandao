@@ -1128,8 +1128,11 @@ final class ComicEngine {
         //    旧实现 `await AutoLogin.ensure(src)` 串行挡在详情抓取之前，
         //    而它跑的是隐藏 WKWebView（真机实测漫画网一次 5.1 秒）。
         //    绝大多数源不需要登录态，这段等待纯属白等；只有抓不到时才回头等它。
-        let loginTask: Task<Bool, Never>? = ComicRepository.shared.source(url: origin).map {
-            Task { await AutoLogin.ensure($0) }
+        // ⚠️ 必须显式命名参数 `src`：写成 `$0` 会被**内层 `Task` 闭包**抢走
+        //    （Swift 报 "contextual type for closure argument list expects 1 argument,
+        //     which cannot be implicitly ignored"）。踩过一次。
+        let loginTask: Task<Bool, Never>? = ComicRepository.shared.source(url: origin).map { src in
+            Task { await AutoLogin.ensure(src) }
         }
         // 诊断链：一次详情加载 = 一个 session，后面关键节点都带上它
         let diag = DiagLog.begin("detail")
