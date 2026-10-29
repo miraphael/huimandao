@@ -345,7 +345,9 @@ final class ComicEngine {
     func searchOne(_ source: ComicSource, keyword: String, page: Int = 1) async -> [SearchResult] {
         guard let rawSearchRule = source.ruleSearchUrl, !rawSearchRule.isEmpty else { return [] }
         if breakerShouldSkip(source.bookSourceUrl, stage: "搜索") { return [] }
-        await AutoLogin.ensure(source)   // 自动登录（同上）
+        // 自动登录**不再串行挡在抓取前面**（2026-10-29）：见 `browse` 里的详细说明。
+        // 登录与抓取并行跑，只有抓不到才回头等它并重试一次。
+        let loginTask = Task { await AutoLogin.ensure(source) }
         let key = searchScopeKey(source: source.bookSourceUrl, keyword: keyword)
         let hasPlaceholder = PagingStrategyResolver.hasPlaceholder(rawSearchRule)
 
@@ -390,6 +392,13 @@ final class ComicEngine {
                                                        headers: headers, timeout: 15)
         if html.isEmpty, (req.httpMethod ?? "GET").uppercased() == "GET" {
             html = await HttpFetcher.shared.fetchPage(target, method: "GET", body: nil,
+                                                      headers: headers, timeout: 15)
+        }
+        if html.isEmpty {
+            // 抓不到 → 可能「需要登录态才放行」，这时才值得等登录并重试一次
+            _ = await loginTask.value
+            html = await HttpFetcher.shared.fetchPage(target, method: req.httpMethod ?? "GET",
+                                                      body: String(data: req.httpBody ?? Data(), encoding: .utf8),
                                                       headers: headers, timeout: 15)
         }
         guard !html.isEmpty else {
@@ -492,6 +501,18 @@ final class ComicEngine {
 
         // 保留旧版的超时与 SPA/WebView 兜底，但留住 HTML 才能发现下一页。
         let method = req.httpMethod ?? "GET"
+        // 🔴 **自动登录与抓取并行**（2026-10-29 用户实测「切换图源后加载时间太长」）
+        //
+        //    旧实现是 `await AutoLogin.ensure(s)` **串行挡在抓取前面**。
+        //    它跑的是一个隐藏 WKWebView（`passChallenge` 轮询到页面放行为止），
+        //    真机日志实测漫画网一次 **5.1 秒**（它的 loginUrl 是个搜索页，
+        //    实际是在过人机验证），而且正好压在详情抓取的那 10.7 秒里。
+        //    切源时这段等待直接暴露成「转圈」。
+        //
+        //    现在：登录和抓取同时跑。绝大多数源根本不需要登录态就能抓，
+        //    所以这条等待**从关键路径上彻底消失**；只有真的抓不到时，
+        //    才回头等登录完成并重试一次（需要的源仍然能用）。
+        let loginTask = Task { await AutoLogin.ensure(source) }
         let loadColumnHTML: () async -> String = {
             var t = await HttpFetcher.shared.fetchPage(requestUrl, method: method, body: body,
                                                         headers: headers, timeout: 30)
@@ -514,6 +535,11 @@ final class ComicEngine {
         } else {
             html = await ResponseCache.shared.cachedStale(
                 key: columnCacheKey, ttl: 180, fetch: loadColumnHTML) ?? ""
+        }
+        if html.isEmpty {
+            // 抓不到 → 可能「需要登录态才放行」：这时才值得等登录，然后重试一次
+            _ = await loginTask.value
+            html = await loadColumnHTML()
         }
         guard !html.isEmpty else {
             // 🔎 插桩：**抓取失败**（与「解析为空」完全不同的原因，修法也不同）
@@ -857,6 +883,34 @@ final class ComicEngine {
         return out
     }
 
+    /// 后台预热各源「第一个栏目」的列表 —— 让**切换图源**不再等网络。
+    ///
+    /// ## 为什么需要（2026-10-29 用户实测「切换图源后加载时间太长」）
+    /// 切源时 `browse` 必须现场联网，慢站 1~10 秒。而漫画台的源是**固定的几个**，
+    /// 用户迟早会切到每一个 —— 那就没必要等他想切的时候才开始抓。
+    ///
+    /// 做法：首屏加载完成后，在后台把**其他**源的首栏目依次抓进缓存
+    /// （`cachedStale` 同一套 key），用户真的切过去时就是缓存命中。
+    ///
+    /// 约束：
+    /// · **串行 + 300ms 间隔**：不和用户当前的点击抢连接池
+    /// · **跳过当前源**：它已经在屏幕上加载过了
+    /// · **跳过熔断源**：坏源不占带宽
+    /// · **`Task.isCancelled` 检查**：用户切走就立刻停
+    func warmUpColumns(_ sources: [ComicSource], limit: Int = 5) async {
+        for s in sources.prefix(limit) {
+            if Task.isCancelled { return }
+            if breakerShouldSkip(s.bookSourceUrl, stage: "预热") { continue }
+            guard let col = findColumns(sources: [s]).first else { continue }
+            _ = await browse(url: col.url,
+                             source: SourceContentPatch.sourceForExplore(s),
+                             page: 1, extraHeaders: col.headers)
+            if Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        DiagLog.event("warmup", "columns", "各源首栏目预热完成（\(min(sources.count, limit)) 个源）")
+    }
+
     /// 栏目页 → 漫画卡片列表（复用搜索列表规则）
     func explore(_ column: FindColumn, page: Int = 1,
                  forceRefresh: Bool = false) async -> [SearchResult] {
@@ -866,8 +920,8 @@ final class ComicEngine {
                           "❌ 找不到源 origin=\(column.origin)（栏目「\(column.title)」）")
             return []
         }
-        // 🔴 自动登录：源配了 loginUrl 且没登录过 → 先自动跑一次隐藏 WebView 拿 token
-        await AutoLogin.ensure(s)
+        // 自动登录已下沉到 `browse` 内部并与抓取**并行** ——
+        // 这里再串行 await 一次会把「切源」直接卡住（真机实测漫画网一次 5.1 秒）。
         // ⚠️ 用「发现专用」的源副本：有些站（tuku.cc）的**栏目页**和**搜索页**是两个 DOM，
         //    而 explore 复用搜索规则解析栏目页 → 必然 0 条。
         //    这里只替换列表四项，不动搜索、不动数据库。详见 `SourceContentPatch.sourceForExplore`。
@@ -1070,8 +1124,13 @@ final class ComicEngine {
                 forceRefresh: Bool = false,
                 skipPagination: Bool = false,
                 reuseMetadataFrom: ComicInfo? = nil) async -> ComicInfo {
-        // 🔴 自动登录：从书架/搜索直接进详情时也要保证登录态
-        if let src = ComicRepository.shared.source(url: origin) { await AutoLogin.ensure(src) }
+        // 🔴 自动登录与抓取**并行**（2026-10-29）：
+        //    旧实现 `await AutoLogin.ensure(src)` 串行挡在详情抓取之前，
+        //    而它跑的是隐藏 WKWebView（真机实测漫画网一次 5.1 秒）。
+        //    绝大多数源不需要登录态，这段等待纯属白等；只有抓不到时才回头等它。
+        let loginTask: Task<Bool, Never>? = ComicRepository.shared.source(url: origin).map {
+            Task { await AutoLogin.ensure($0) }
+        }
         // 诊断链：一次详情加载 = 一个 session，后面关键节点都带上它
         let diag = DiagLog.begin("detail")
         let t0 = Date()
@@ -1209,6 +1268,11 @@ final class ComicEngine {
         if fetched == nil, forceRefresh {
             // 强刷失败时退回缓存，别把已有内容弄丢
             fetched = await ResponseCache.shared.peek(cacheKey)
+        }
+        // 抓不到 → 可能「需要登录态才放行」：等登录完成，重试一次
+        if (fetched ?? "").isEmpty {
+            if let t = loginTask { _ = await t.value }
+            fetched = await loadDetailHTML()
         }
         guard let html = fetched, !html.isEmpty else {
             // ── 空页 ≠ 规则失效 ──────────────────────────────────────────

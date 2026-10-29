@@ -48,7 +48,8 @@ enum AutoLogin {
 
         DiagLog.event("login", "auto",
                       "自动登录开始：\(s.bookSourceName) → \(DiagLog.safeURL(loginUrl))")
-        let res = await WebViewRuleEngine.shared.passChallenge(url: loginUrl, maxWaitMs: 25_000)
+        // 25s → 10s：真机实测正常放行只需几秒，等满 25 秒的只会是「压根过不去」的情况，那 15 秒纯属白等（失败后还有 10 分钟冷却）。
+        let res = await WebViewRuleEngine.shared.passChallenge(url: loginUrl, maxWaitMs: 10_000)
         guard res.passed else {
             lock.lock(); failedAt[s.bookSourceUrl] = Date(); lock.unlock()
             DiagLog.event("login", "auto",

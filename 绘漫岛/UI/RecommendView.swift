@@ -26,6 +26,8 @@ struct RecommendView: View {
     @State private var showLogin = false
     /// 详情页预取任务 —— 换栏目/换源时取消，避免为旧列表白拉
     @State private var prefetchTask: Task<Void, Never>?
+    /// 各源首栏目的预热只做一次（首屏出来之后）
+    @State private var warmedUp = false
 
     var body: some View {
         if embedded {
@@ -258,7 +260,16 @@ struct RecommendView: View {
     private func switchSource(_ s: ComicSource?) {
         selectedSource = s
         if let s { lastSourceUrl = s.bookSourceUrl }
+        prefetchTask?.cancel()
         guard let s else { columns = []; items = []; return }
+        // 🔴 切源要**立刻清空旧列表**（2026-10-29「切换图源后加载时间太长」）：
+        //    不清空的话，上一个源的漫画会一直挂在新源的名字下面，
+        //    用户看到的是「内容对不上 + 一直不更新」；清空后骨架马上出现，
+        //    至少能明确知道「正在换源加载」。
+        items = []
+        page = 1
+        hasMore = true
+        moreMessage = ""
         // 该源的发现栏目
         columns = ComicEngine.shared.findColumns(sources: [s])
         selectedColumn = columns.first
@@ -323,7 +334,20 @@ struct RecommendView: View {
             hasMore = false
             moreMessage = "栏目暂无可解析内容"
         }
-        if p == 1 { startPrefetch(r) }
+        if p == 1 {
+            startPrefetch(r)
+            startWarmUp()
+        }
+    }
+
+    /// 首屏出来后，后台预热**其他**源的首栏目 —— 用户真的切过去时就是缓存命中。
+    /// 详见 `ComicEngine.warmUpColumns`。
+    private func startWarmUp() {
+        guard !warmedUp else { return }
+        warmedUp = true
+        let others = sources.filter { $0.bookSourceUrl != selectedSource?.bookSourceUrl }
+        guard !others.isEmpty else { return }
+        Task { await ComicEngine.shared.warmUpColumns(others, limit: 5) }
     }
 
     /// 预取前几本书的**详情 HTML** —— 用户滑两下再点就是 0ms。
