@@ -73,6 +73,21 @@ final class DetailSession: ObservableObject {
             return
         }
         ComicRepository.shared.addHistory(info: firstPage)
+
+        // 🔴 **只有「首屏可能不完整」时才补全**（2026-10-29「更快更精确」）。
+        //    补全会翻页的条件只有两个：源有 `ruleChapterUrlNext`，或详情页有分页痕迹。
+        //    两个都不成立时，补全必然返回一模一样的列表 —— 图库 2672 章实测白等 2.1 秒
+        //    （真机日志原话：`章节补全：首屏 2672 章 → 完整 2672 章（未替换）`）。
+        let worthEnrich = await ComicEngine.shared.needsChapterEnrichment(
+            noteUrl: noteUrl, origin: origin)
+        guard requestID == id, !Task.isCancelled else { return }
+
+        guard worthEnrich else {
+            DiagLog.event("detail", "enrich", "首屏章节已完整（无分页线索）→ 跳过补全")
+            state = .loaded
+            return
+        }
+
         state = .enrichingChapters
 
         enrichmentTask?.cancel()

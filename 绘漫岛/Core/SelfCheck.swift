@@ -258,6 +258,24 @@ enum SelfCheck {
             Case(name: "Referer：空串仍为空") {
                 HMDImagePipeline.normalizedReferer("   ").isEmpty
             },
+
+            // ── 章节补全的判据（2026-10-29「更快更精确」）────────────────
+            //
+            // 详情页两阶段加载里，第二阶段（分页探测）只在两个条件下才可能有新内容：
+            // 源配了 `ruleChapterUrlNext`，或页面里有分页痕迹。
+            // 判据错判成「有分页」→ 白跑一次完整解析（图库 2672 章 = 2.1 秒）；
+            // 错判成「没分页」→ 章节只显示第一页（更严重）。
+            // 这里用最小样本锁住「不误报 / 不漏报」两个方向。
+            Case(name: "分页痕迹：普通章节列表不误报") {
+                !UniversalParser.hasPaginationHint(
+                    "<div class='chapters'><a href='/c/1'>第1话</a><a href='/c/2'>第2话</a></div>")
+            },
+            Case(name: "分页痕迹：出现「下一页」即命中") {
+                UniversalParser.hasPaginationHint("<a href='?page=2'>下一页</a>")
+            },
+            Case(name: "分页痕迹：空页面不误报") {
+                !UniversalParser.hasPaginationHint("")
+            },
         ]
 
         var failed: [String] = []

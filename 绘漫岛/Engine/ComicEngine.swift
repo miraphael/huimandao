@@ -1063,6 +1063,29 @@ final class ComicEngine {
     ///   本次只解析**章节列表**。用途：详情页第二阶段补全 —— 首屏已经把元信息解析出来了，
     ///   第二阶段再串行 `await` 一遍 7 个字段（含 JS 规则时相当慢）纯属重复劳动。
     ///   ⚠️ 传入的 info 必须与 `noteUrl`/`origin` 同源（调用方 DetailSession 保证）。
+    // MARK: - 是否需要「章节补全」
+
+    /// 首屏之后，**还值不值得**再跑一次完整解析（分页探测）。
+    ///
+    /// ## 为什么需要（2026-10-29「更快更精确」）
+    /// 详情页原本固定走两阶段：① 首屏（skipPagination）② 补全（分页探测）。
+    /// 但补全会翻页的**全部条件只有两个**：
+    ///   ① 源配了 `ruleChapterUrlNext`
+    ///   ② 详情页里有分页痕迹（`hasPaginationHint`）
+    /// 两个都不成立时，补全必然返回和首屏**一模一样**的列表 ——
+    /// 用户却为此多等一次完整解析（图库 951KB / 2672 章实测 **2.1 秒**，
+    /// 而且真机日志里那次补全的结果就是「2672 → 2672（未替换）」）。
+    ///
+    /// 判据在首屏就能算出来，不需要真的跑一遍再比较。
+    func needsChapterEnrichment(noteUrl: String, origin: String) async -> Bool {
+        guard let s = ComicRepository.shared.source(url: origin) else { return false }
+        if !(s.ruleChapterUrlNext ?? "").isEmpty { return true }
+        // HTML 首屏刚抓过，这里读缓存（0ms），只是扫一遍分页特征词
+        let key = CacheDomain.detail.key(origin, noteUrl)
+        guard let html = await ResponseCache.shared.get(key), !html.isEmpty else { return false }
+        return UniversalParser.hasPaginationHint(html)
+    }
+
     // MARK: - 详情页预取（「秒开」的真正解法）
 
     /// 在用户**还没点**之前，把详情页 HTML 提前拉进缓存。
@@ -1527,12 +1550,28 @@ final class ComicEngine {
         // 说明瓶颈在「取独立章节页」那次额外请求。
         DiagLog.event(diag, "detail", "③章节解析完成（\(info.chapters.count) 章）",
                       ms: Int(Date().timeIntervalSince(tChap) * 1000))
-        // 章节列表落库（若该书已在书架）—— 让下次点书架可以零网络直开
-        if !skipPagination, !info.chapters.isEmpty, ComicRepository.shared.inShelf(noteUrl: noteUrl) {
+        // ── 章节列表是否**已经完整**（2026-10-29「更快更精确」）─────────────
+        //
+        // `chapters()` 里会去翻页的全部条件只有两个（见 probePaginationParallel 上方注释）：
+        //   ① 源配了 `ruleChapterUrlNext`
+        //   ② 页面里有分页痕迹（`UniversalParser.hasPaginationHint`）
+        // 两个都不成立时，补全阶段**必然**返回和首屏一模一样的列表 ——
+        // 那就没必要再跑一次完整解析（图库 951KB / 2672 章实测要 2.1 秒）。
+        //
+        // 实测（2026-10-29）：图库详情页分页痕迹 **0 个**、W漫画命中 `pagination`。
+        let chaptersComplete = !skipPagination
+            || ((s.ruleChapterUrlNext ?? "").isEmpty
+                && !UniversalParser.hasPaginationHint(html))
+        if !chaptersComplete {
+            DiagLog.event(diag, "detail", "首屏章节可能不完整（有分页线索）→ 需要补全")
+        }
+        // 章节列表落库（若该书已在书架）—— 让下次点书架可以零网络直开。
+        // ⚠️ 首屏也会写：只要列表已完整，早写早受益（补全阶段仍会用更全的覆盖）。
+        if chaptersComplete, !info.chapters.isEmpty, ComicRepository.shared.inShelf(noteUrl: noteUrl) {
             ComicRepository.shared.saveChapters(noteUrl: noteUrl, chapters: info.chapters)
         }
         // 章节列表缓存（同一本书用统一 key，便于后续「续读」秒开）
-        if !skipPagination, !info.chapters.isEmpty {
+        if chaptersComplete, !info.chapters.isEmpty {
             let payload = (try? JSONSerialization.data(withJSONObject: info.chapters.map {
                 ["n": $0.name, "u": $0.url, "g": $0.group]
             })).flatMap { String(data: $0, encoding: .utf8) }

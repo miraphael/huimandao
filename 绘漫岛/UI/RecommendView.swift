@@ -28,6 +28,8 @@ struct RecommendView: View {
     @State private var prefetchTask: Task<Void, Never>?
     /// 各源首栏目的预热只做一次（首屏出来之后）
     @State private var warmedUp = false
+    /// 首屏 explore 耗时（ms）—— 预热要不要跑，取决于网络是不是已经够慢
+    @State private var firstLoadMs = 0
 
     var body: some View {
         if embedded {
@@ -327,7 +329,9 @@ struct RecommendView: View {
             page = p
         }
         defer { if gen == loadGen { loading = false } }
+        let tLoad = Date()
         let r = await ComicEngine.shared.explore(col, page: p, forceRefresh: force)
+        if p == 1 { firstLoadMs = Int(Date().timeIntervalSince(tLoad) * 1000) }
         guard gen == loadGen else { return }     // 晚到的旧结果：整段丢弃，不碰 items
         items = r
         if p == 1, r.isEmpty {
@@ -342,12 +346,25 @@ struct RecommendView: View {
 
     /// 首屏出来后，后台预热**其他**源的首栏目 —— 用户真的切过去时就是缓存命中。
     /// 详见 `ComicEngine.warmUpColumns`。
+    ///
+    /// 🔴 三条收敛规则（2026-10-29）—— 预热本身也会占带宽，做过头反而更慢：
+    ///   ① **首屏本身慢于 5 秒就不预热**：说明链路已经很紧张，再加后台请求只会
+    ///      和用户的点击抢连接池（这正是「越优化越慢」的典型陷阱）。
+    ///   ② **延迟 3 秒再开始**：让首屏渲染和封面加载先跑完。
+    ///   ③ **最多 3 个源**：够覆盖用户「切一两次」的实际行为。
     private func startWarmUp() {
         guard !warmedUp else { return }
         warmedUp = true
+        guard firstLoadMs < 5000 else {
+            DiagLog.event("warmup", "skip", "首屏耗时 \(firstLoadMs)ms（>5s）→ 跳过预热，避免抢带宽")
+            return
+        }
         let others = sources.filter { $0.bookSourceUrl != selectedSource?.bookSourceUrl }
         guard !others.isEmpty else { return }
-        Task { await ComicEngine.shared.warmUpColumns(others, limit: 5) }
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await ComicEngine.shared.warmUpColumns(others, limit: 3)
+        }
     }
 
     /// 预取前几本书的**详情 HTML** —— 用户滑两下再点就是 0ms。
