@@ -16,7 +16,7 @@ import Foundation
 enum SourceContentPatch {
 
     /// 只跑一次；以后要再补新规则时把版本号 +1。
-    private static let flagKey = "patch.contentRules.v5"
+    private static let flagKey = "patch.contentRules.v6"
 
     // MARK: - 发现栏目专用列表规则（只影响 explore，不影响搜索）
 
@@ -103,6 +103,26 @@ enum SourceContentPatch {
                 s.ruleSearchNoteUrl = f.noteUrl
                 applied = true
             }
+            // ⑤ 站点改版导致**规则失效**：只在库里还是那条已知死规则时才换。
+            //    判据一律用「包含 / 相等」，不用「无条件覆盖」——
+            //    用户自己改过的规则、或站点改回来后的新规则都不能被踩掉。
+            if let r = patch.rules {
+                if let when = r.chapterListWhenContains, let to = r.chapterList,
+                   (s.ruleChapterList ?? "").contains(when) {
+                    s.ruleChapterList = to
+                    applied = true
+                }
+                if let when = r.searchCoverWhenEquals, let to = r.searchCover,
+                   (s.ruleSearchCoverUrl ?? "") == when {
+                    s.ruleSearchCoverUrl = to
+                    applied = true
+                }
+                if let when = r.coverWhenContains, let to = r.cover,
+                   (s.ruleCoverUrl ?? "").contains(when) {
+                    s.ruleCoverUrl = to
+                    applied = true
+                }
+            }
             guard applied else { continue }
             ComicRepository.shared.saveSource(s)
             changed.append(s.bookSourceName)
@@ -127,6 +147,32 @@ enum SourceContentPatch {
         var dropBadBook: String? = nil
         /// 发现栏目补丁：老规则指向已改版的页面时整体换掉
         var find: FindPatch? = nil
+        /// 站点改版导致的选择器失效补丁
+        var rules: RulesPatch? = nil
+    }
+
+    /// 站点改版后**替换已失效的选择器**。
+    ///
+    /// 为什么需要（2026-10-29 真机实测）：
+    /// · W漫画 把章节列表从 `div.chapter-list a.chaper-btn` 改成了 `div.chapters a`
+    ///   —— 旧选择器实测命中 **0 个节点**，章节全靠「通用链接扫描」兜底出 12 条。
+    /// · W漫画 把列表封面从 `<img data-src>` 改成了 `div.thumb` 的
+    ///   **内联 `background-image:url('…')`** —— 页面里一个 `<img>` 都没有，
+    ///   规则产出**空字符串**，于是封面根本不发请求（连失败日志都没有，
+    ///   用户看到的就是「一片空白，也不报错」）。
+    ///
+    /// 每个字段都是**条件替换**：库里存的还是那条已知死规则才换，
+    /// 用户改过的、或站点改回来后自己配的规则都不会被踩掉。
+    private struct RulesPatch {
+        /// 章节列表：库里含这个子串（= 已知失效的旧选择器）时替换
+        var chapterListWhenContains: String? = nil
+        var chapterList: String? = nil
+        /// 列表封面：库里**恰好等于**这个值（= 已知失效）时替换
+        var searchCoverWhenEquals: String? = nil
+        var searchCover: String? = nil
+        /// 详情页封面：库里含这个子串时替换
+        var coverWhenContains: String? = nil
+        var cover: String? = nil
     }
 
     /// 发现栏目的一整套规则（列表 / 名称 / 链接 / 栏目地址）
@@ -159,7 +205,18 @@ enum SourceContentPatch {
                 list: "class.card-content||class.book",
                 name: "class.cardtitle@text||tag.h3@text",
                 noteUrl: "tag.a@href||href",
-                whenFindUrlContains: "/new")),
+                whenFindUrlContains: "/new"),
+              // 2026-10-29 站点改版：章节与封面两条选择器都失效了（实测）
+              //   · `chaper-btn` 全站命中 0 次 → 章节只能靠兜底扫描
+              //   · 封面搬进 `div.thumb` 的内联 background-image，页面无任何 <img>
+              //     → 规则产出空串 → 封面不发请求、连失败日志都没有
+              rules: RulesPatch(
+                chapterListWhenContains: "chaper-btn",
+                chapterList: "@css:div.chapters a||@css:div.chapter-list a.chaper-btn",
+                searchCoverWhenEquals: "tag.img@data-src",
+                searchCover: wmanhuaStyleCover,
+                coverWhenContains: "img[data-src]",
+                cover: wmanhuaStyleCover + "||@css:img[data-src]@data-src")),
 
         // 瓜子：正文图有独立 class，不配规则会被 8 张「推荐封面」污染
         Patch(host: "guazimanhua.com", book: "tag.img.reading-image@src"),
@@ -195,6 +252,15 @@ enum SourceContentPatch {
                  "base":"https://image.kalaimg.top"}}
     ]
     """#
+
+    /// W漫画 封面（2026-10-29 改版后）：封面不在 `<img>` 里，而是
+    /// `<div class="thumb" style="background-image:url('https://image4.wmanhua.com/…/cover.webp')">`
+    ///
+    /// 所以先用 `@style` 把整个 style 属性取出来，再用 `##` 正则把 URL 抠出来。
+    /// `$1` 是 `NSRegularExpression.replaceMatches(withTemplate:)` 的捕获组引用。
+    /// ⚠️ 正则里**不能出现字面 `&`**（`splitAndRun` 会把单 `&` 当规则分隔符，
+    ///    且不保护 `##` 正则）—— 这条正则只有 `.` `*` `url` `\(` `'`，安全。
+    private static let wmanhuaStyleCover = "@css:div.thumb@style##.*url\\('([^']+)'\\).*##$1"
 
     /// W漫画：脚本变量直接拼图
     private static let wmanhuaFlowJSON = #"""
