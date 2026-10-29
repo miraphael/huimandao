@@ -652,6 +652,14 @@ struct CoverImage: View {
         do {
             return (try await HMDImagePipeline.shared.image(for: req), nil)
         } catch {
+            // 🔴 **取消不是失败**（2026-10-29 真机日志里一次出现 6 条同毫秒的
+            //    `封面失败[unknown]：Nuke.ImagePipeline.Error 错误9`）。
+            //    那是列表刷新/滚动时 SwiftUI 把 `.task(id:)` 取消掉，图片请求
+            //    被 Nuke 判成 cancelled —— 如果当成失败，用户会看到一整排
+            //    「点一下重试」的假故障，而其实图是好的。
+            //    这里直接返回「无结果也无原因」：视图保持加载态，重新出现时
+            //    `.task(id: url)` 会再拉一次。
+            if Self.isCancellation(error) { return (nil, nil) }
             // 诊断：封面为什么空 —— 记 host + 错误 + 归因，别记完整 URL（可能带签名）
             let host = URL(string: url)?.host ?? "?"
             let why = FailureReason.from(error: error)
@@ -659,6 +667,18 @@ struct CoverImage: View {
                           "\(host) 封面失败[\(why.rawValue)]：\(error.localizedDescription)")
             return (nil, why)
         }
+    }
+
+    /// 这个错误是不是「被取消」而不是「真失败」。
+    ///
+    /// Nuke 会把取消包成 `ImagePipeline.Error`（真机日志里是「错误9」），
+    /// 所以除了标准类型判断，还要用文本兜一层 —— 宁可多认一次取消，
+    /// 也不要让用户看到一整排假的「点一下重试」。
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return true }
+        return String(describing: error).lowercased().contains("cancel")
     }
 }
 

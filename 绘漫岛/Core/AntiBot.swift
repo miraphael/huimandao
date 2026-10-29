@@ -129,9 +129,23 @@ enum AntiBot {
     }
 
     /// 强特征：这些标记**不可能**出现在正常漫画站页面里，不看体积直接判。
+    /// 🔴 `"challenge-platform"` 已**移除**（2026-10-29 真机 + 桌面实测）。
+    ///
+    ///    它是 Cloudflare 的**目录名**，正常页面也会注入一句 JS 检测信标：
+    ///    ```js
+    ///    a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js'
+    ///    ```
+    ///    漫画网详情页 45KB 的**正常** HTML 里就有这一句 → 被判成挑战页 →
+    ///    走完 L1/L2/L3 全链 → 返回空串 → 用户看到「详情打不开」。
+    ///    真机日志实证：`[fail] fetch 全链失败 .../shuohuangdexiaogouhuibeichidiaode
+    ///    status=200 bytes=45659` —— **200 且有 45KB 正文**，根本不是挑战。
+    ///
+    ///    真正的挑战页用的是 `/challenge-platform/h/b/orchestrate/chl_page/`，
+    ///    所以改用 `chl_page` + `challenge-form`（CF 挑战页的 `<form id="challenge-form">`）
+    ///    这两个**只在挑战页出现**的标记。
     static let strongMarkers = [
         "cf-mitigated", "__cf_chl", "cf-browser-verification", "cf-chl",
-        "challenge-platform", "window._cf_chl_opt", "cf_challenge",
+        "chl_page", "challenge-form", "window._cf_chl_opt", "cf_challenge",
         "just a moment", "ddos protection", "attention required"
     ]
 

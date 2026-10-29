@@ -276,6 +276,30 @@ enum SelfCheck {
             Case(name: "分页痕迹：空页面不误报") {
                 !UniversalParser.hasPaginationHint("")
             },
+
+            // ── 挑战页判定（2026-10-29 真机抓到的误判）──────────────────
+            //
+            // 漫画网详情页 45KB 的**正常** HTML 里含一句 Cloudflare JS 检测信标
+            //   `a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js'`
+            // 旧强特征表里有 `"challenge-platform"` → 判成挑战页 → 走完 L1/L2/L3
+            // → 返回空串。真机日志：`全链失败 status=200 bytes=45659`。
+            Case(name: "挑战判定：CF 正常页的 jsd 信标不误判") {
+                let body = "<html><body><script>var a=document.createElement('script');"
+                    + "a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';</script>"
+                    + String(repeating: "<div>正文内容</div>", count: 120)
+                    + "</body></html>"
+                return !AntiBot.isChallenge(status: 200, headers: [:], body: body)
+            },
+            // 反过来：真的挑战页必须还能认出来，否则「过挑战」整条链就失效了
+            Case(name: "挑战判定：真实挑战页仍能认出") {
+                let body = "<html><head><title>Just a moment...</title></head>"
+                    + "<body><form id=\"challenge-form\" action=\"/x\"></form></body></html>"
+                return AntiBot.isChallenge(status: 200, headers: [:], body: body)
+            },
+            Case(name: "挑战判定：2xx 且无强特征 → 不算挑战") {
+                !AntiBot.isChallenge(status: 200, headers: [:],
+                                     body: "<html><body>正常漫画列表</body></html>")
+            },
         ]
 
         var failed: [String] = []

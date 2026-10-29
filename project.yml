@@ -107,7 +107,7 @@ targets:
         #    （末位两位，每次 +1，读作 +0.01；不要一次跳到 1.1.0 这种大步）
         MARKETING_VERSION: "1.3.0"
         # 构建号：iOS 要求它是单调递增的整数，与上面的版本号各自独立维护
-        CURRENT_PROJECT_VERSION: 142
+        CURRENT_PROJECT_VERSION: 143
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.9"
         ENABLE_BITCODE: NO
