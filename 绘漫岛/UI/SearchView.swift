@@ -46,7 +46,21 @@ struct SearchView: View {
             if input.isEmpty { input = session.keyword }
             history = SearchHistory.shared.keywords
         }
-        .onChange(of: session.searching) { _ in history = SearchHistory.shared.keywords }
+        .onChange(of: session.searching) { nowSearching in
+            history = SearchHistory.shared.keywords
+            // 搜索结束 → 预取前几本书的详情 HTML（点进去就是 0ms）
+            if !nowSearching { startPrefetch() }
+        }
+    }
+
+    /// 预取搜索结果前 6 本的详情 HTML —— 与漫画台同一套逻辑。
+    private func startPrefetch() {
+        let seeds = session.groups.prefix(6).map { g -> (noteUrl: String, origin: String, headers: [String: String]) in
+            let r = g.primary(currentOrigin: session.filterOrigin)
+            return (noteUrl: r.noteUrl, origin: r.origin, headers: r.noteHeaders)
+        }
+        guard !seeds.isEmpty else { return }
+        Task { await ComicEngine.shared.prefetchDetails(seeds, limit: 6) }
     }
 
     // MARK: - 搜索框

@@ -989,6 +989,63 @@ final class ComicEngine {
     ///   本次只解析**章节列表**。用途：详情页第二阶段补全 —— 首屏已经把元信息解析出来了，
     ///   第二阶段再串行 `await` 一遍 7 个字段（含 JS 规则时相当慢）纯属重复劳动。
     ///   ⚠️ 传入的 info 必须与 `noteUrl`/`origin` 同源（调用方 DetailSession 保证）。
+    // MARK: - 详情页预取（「秒开」的真正解法）
+
+    /// 在用户**还没点**之前，把详情页 HTML 提前拉进缓存。
+    ///
+    /// ## 为什么这是唯一能做到「秒开」的办法（2026-10-29 真机数据）
+    /// 对冲请求上线后，详情抓取耗时变成 317ms / 1491ms / 4602ms / 10701ms ——
+    /// **同一次会话、同一台手机**，差异只来自站点本身。慢站（W漫画）无论怎么优化
+    /// 通道都不可能秒开，因为瓶颈在对面。
+    ///
+    /// 所以正确的做法不是「让网络变快」，而是**在用户点之前就把网络走完**：
+    /// 列表渲染出来后，后台按顺序预取前几本书的详情 HTML。
+    /// 用户滑两下再点，缓存已经命中 → `①详情HTML就绪 (0ms，缓存命中)`。
+    ///
+    /// ## 约束（每一条都有原因）
+    /// · **串行 + 间隔**：并发预取会和用户自己的点击抢连接池，反而更慢
+    /// · **只预取 HTML，不解析**：解析很贵（图库 2672 章要 2 秒），等真的点进去再做
+    /// · **已缓存就跳过**：不重复打网络
+    /// · **熔断源直接跳过**：坏源不该占带宽
+    /// · **不触发自动登录**：那是 WebView，重且会抢网络
+    func prefetchDetail(noteUrl: String, origin: String,
+                        extraHeaders: [String: String] = [:]) async {
+        guard !noteUrl.isEmpty, !origin.isEmpty else { return }
+        guard let s = ComicRepository.shared.source(url: origin) else { return }
+        if breakerShouldSkip(origin, stage: "预取") { return }
+        let key = CacheDomain.detail.key(origin, noteUrl)
+        if await ResponseCache.shared.isFresh(key) { return }
+
+        var reqHeaders = Self.sourceHeaders(s, referer: origin)
+        for (k, v) in extraHeaders { reqHeaders[k] = v }
+
+        let t0 = Date()
+        let html = await ResponseCache.shared.cached(
+            key: key, ttl: CacheDomain.detail.ttl) {
+                await HttpFetcher.shared.fetchPage(noteUrl, headers: reqHeaders, timeout: 20)
+            }
+        DiagLog.event("prefetch", "detail",
+                      "\(s.bookSourceName) \(DiagLog.safeURL(noteUrl)) → \(html?.count ?? 0) 字节",
+                      ms: Int(Date().timeIntervalSince(t0) * 1000))
+    }
+
+    /// 给「列表页」用的批量预取：按顺序预取前 `limit` 本，每本之间留一点间隔。
+    ///
+    /// 返回前会检查 `Task.isCancelled` —— 列表刷新/切源时旧任务应当立刻停下，
+    /// 否则用户切了源，后台还在为上一个源拉详情，纯属浪费。
+    func prefetchDetails(_ items: [(noteUrl: String, origin: String, headers: [String: String])],
+                         limit: Int = 6) async {
+        guard limit > 0 else { return }
+        for item in items.prefix(limit) {
+            if Task.isCancelled { return }
+            await prefetchDetail(noteUrl: item.noteUrl, origin: item.origin,
+                                 extraHeaders: item.headers)
+            if Task.isCancelled { return }
+            // 间隔 250ms：给用户自己的点击让路（连接池不是无限的）
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
     func detail(noteUrl: String, origin: String, extraHeaders: [String: String] = [:],
                 forceRefresh: Bool = false,
                 skipPagination: Bool = false,
@@ -1094,25 +1151,40 @@ final class ComicEngine {
         //    不支持 `await`（编译错误：'await' in an autoclosure that does not support
         //    concurrency / call to actor-isolated instance method 'peek' in a synchronous
         //    nonisolated context）。必须先把 await 求出来再参与逻辑运算。
-        var cacheHit = false
-        if !forceRefresh {
-            cacheHit = (await ResponseCache.shared.peek(cacheKey)?.isEmpty == false)
+        var cacheState = "网络抓取"
+        if !forceRefresh,
+           let stale = await ResponseCache.shared.peekStale(cacheKey), !stale.isEmpty {
+            cacheState = await ResponseCache.shared.isFresh(cacheKey) ? "缓存命中" : "陈旧命中"
         }
-        var fetched: String? = await ResponseCache.shared.cached(
-            key: cacheKey, ttl: CacheDomain.detail.ttl, forceRefresh: forceRefresh) {
-                // ⚠️ 「空则重试」的两次请求**共用同一个 30s 超时**时，失败路径最坏要 60s。
-                //    这里让**重试**用满超时、首次请求用一半：慢站首包超时后能更快进入重试，
-                //    总等待时间从「30+30」降到「15+30」，且成功路径行为不变（首次就成功）。
-                var t = await HttpFetcher.shared.fetchPage(noteUrl, headers: reqHeaders, timeout: 15)
-                if t.isEmpty { t = await HttpFetcher.shared.fetchPage(noteUrl, headers: reqHeaders) }
-                return t
-            }
+        // ⚠️ 「空则重试」的两次请求**共用同一个 30s 超时**时，失败路径最坏要 60s。
+        //    这里让**重试**用满超时、首次请求用一半：慢站首包超时后能更快进入重试，
+        //    总等待时间从「30+30」降到「15+30」，且成功路径行为不变（首次就成功）。
+        let loadDetailHTML: () async -> String = {
+            var t = await HttpFetcher.shared.fetchPage(noteUrl, headers: reqHeaders, timeout: 15)
+            if t.isEmpty { t = await HttpFetcher.shared.fetchPage(noteUrl, headers: reqHeaders) }
+            return t
+        }
+        // 🔴 **陈旧优先**（2026-10-29）：对冲上线后详情抓取从 25.5s 降到 317ms~10.7s，
+        //    但同一次会话里卡拉 317ms / 图库 1491ms / W漫画 10701ms —— 瓶颈已经是
+        //    **站点本身**，通道再怎么优化也救不了慢站。
+        //    所以改成「有旧值就先用旧值渲染，后台静默刷新」：第二次打开任何一本书
+        //    都是 0ms 出内容，新数据回来再替换。
+        //    `forceRefresh`（下拉刷新）仍然走真网络，保证「刷新」这个动作真的刷新。
+        var fetched: String?
+        if forceRefresh {
+            fetched = await ResponseCache.shared.cached(
+                key: cacheKey, ttl: CacheDomain.detail.ttl,
+                forceRefresh: true, fetch: loadDetailHTML)
+        } else {
+            fetched = await ResponseCache.shared.cachedStale(
+                key: cacheKey, ttl: CacheDomain.detail.ttl, fetch: loadDetailHTML)
+        }
         // ── 分层计时（ARCHITECTURE §8.5）────────────────────────────────
         // 「详情页慢」到底慢在网络首包、反爬挑战升级，还是规则解析，光看总耗时判断不了。
         // 这里把「详情 HTML 就绪」单独打点：若它占了绝大部分耗时，说明瓶颈在 HTTP 层
         // （含 fetchPage 的 L0→L3 挑战升级），而不是解析规则；反之则去查元信息/章节解析。
         DiagLog.event(diag, "detail",
-                      "①详情HTML就绪（\(fetched?.count ?? 0) 字节\(cacheHit ? "，缓存命中" : "，网络抓取")）",
+                      "①详情HTML就绪（\(fetched?.count ?? 0) 字节，\(cacheState)）",
                       ms: Int(Date().timeIntervalSince(tFetch) * 1000))
         if fetched == nil, forceRefresh {
             // 强刷失败时退回缓存，别把已有内容弄丢

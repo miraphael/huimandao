@@ -92,6 +92,47 @@ actor ResponseCache {
         return result
     }
 
+    /// **陈旧优先**（stale-while-revalidate）—— 「秒开」的关键。
+    ///
+    /// 行为：只要磁盘/内存里还有这个 key 的旧值，就**立刻返回**它，
+    /// 同时在后台发一次刷新（不等待、不阻塞 UI）。
+    ///
+    /// ## 为什么需要（2026-10-29 真机数据）
+    /// 对冲请求上线后，详情抓取从 25.5s 降到 317ms~10.7s —— 但**同一次会话里**
+    /// 卡拉 317ms、图库 1491ms、W漫画 10701ms，说明瓶颈已经是**站点本身**，
+    /// 不是我们的通道。慢站无论怎么优化通道都不可能「秒开」。
+    ///
+    /// 唯一能让「打开一本书」变成 0 延迟的办法，就是**打开时不等网络**：
+    /// 用上次的结果先渲染，新数据回来后静默替换。代价是「可能显示几分钟前的
+    /// 章节列表」—— 对漫画来说完全可接受（新增一章不影响你现在读哪一话）。
+    ///
+    /// ⚠️ 与 `cached` 的关键差别：`peek` 会**删除**过期项，`peekStale` 不会。
+    ///    否则「过期即删」会让陈旧优先永远命中不了。
+    func cachedStale(key: String, ttl: TimeInterval,
+                     fetch: @escaping () async -> String?) async -> String? {
+        if let stale = peekStale(key) {
+            // 后台刷新：已过期 + 没有在飞请求时才发
+            if !isFresh(key), !fetching.contains(key) {
+                fetching.insert(key)
+                Task { [weak self] in
+                    let v = await fetch()
+                    await self?.settleBackground(key: key, value: v, ttl: ttl)
+                }
+            }
+            return stale
+        }
+        return await cached(key: key, ttl: ttl, fetch: fetch)
+    }
+
+    /// 后台刷新收尾：写缓存 + 唤醒等待者（复用 `cached` 的防击穿约定）
+    private func settleBackground(key: String, value: String?, ttl: TimeInterval) {
+        let pending = waiters.removeValue(forKey: key) ?? []
+        fetching.remove(key)
+        let result: String? = (value?.isEmpty == false) ? value : nil
+        if let result { store(key, value: result, ttl: ttl) }
+        for cont in pending { cont.resume(returning: result) }
+    }
+
     // MARK: - 读写
 
     /// 直接写入（供引擎缓存「已解析好的结果」用，而不是原始 HTML）
@@ -127,6 +168,35 @@ actor ResponseCache {
         mem[key] = Entry(value: value, expireAt: expireAt, lastAccess: Date())
         evictMemIfNeeded()
         return value
+    }
+
+    /// 读「**哪怕已过期**」的值 —— `cachedStale` 专用。
+    ///
+    /// ⚠️ 与 `peek` 的区别只有一条但很关键：**过期不删除、照样返回**。
+    ///    `peek` 的「过期即删」会让陈旧优先永远命中不了（第一次过期就把文件删了）。
+    /// ⚠️ 不做 LRU 刷新：陈旧值本来就该被新数据替换，不该因为被读而延长生命。
+    func peekStale(_ key: String) -> String? {
+        if let e = mem[key] { return e.value }
+        let url = fileURL(key)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let expire = obj["e"] as? Double,
+              let value = obj["v"] as? String else { return nil }
+        mem[key] = Entry(value: value,
+                         expireAt: Date(timeIntervalSince1970: expire),
+                         lastAccess: Date())
+        evictMemIfNeeded()
+        return value
+    }
+
+    /// 这个 key 是否还在有效期内（`cachedStale` 用来决定要不要后台刷新）
+    func isFresh(_ key: String) -> Bool {
+        if let e = mem[key] { return e.expireAt > Date() }
+        let url = fileURL(key)
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let expire = obj["e"] as? Double else { return false }
+        return Date(timeIntervalSince1970: expire) > Date()
     }
 
     private func store(_ key: String, value: String, ttl: TimeInterval) {

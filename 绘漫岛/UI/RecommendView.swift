@@ -24,6 +24,8 @@ struct RecommendView: View {
     /// 漫画台空着时的**具体原因**（别只写「还没有图源」—— 用户明明有源）
     @State private var emptyReason = ""
     @State private var showLogin = false
+    /// 详情页预取任务 —— 换栏目/换源时取消，避免为旧列表白拉
+    @State private var prefetchTask: Task<Void, Never>?
 
     var body: some View {
         if embedded {
@@ -147,7 +149,13 @@ struct RecommendView: View {
                     }
                 }
                 .overlay {
-                    if loading && items.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+                    if loading && items.isEmpty {
+                        // 🔴 骨架网格而不是居中转圈（2026-10-29）。
+                        //    真机实测：慢站（W漫画）首屏要 1~10 秒，这段时间原来是一整屏空白
+                        //    只放一个转圈 —— 用户完全不知道要等多久，观感就是「卡住了」。
+                        //    骨架能同时传达三件事：正在加载、内容是网格、大概有几本。
+                        skeletonGrid
+                    }
                     if !loading && items.isEmpty && !columns.isEmpty {
                         // 🔴 卡拉这类源需要**网页登录拿令牌**，否则抓取一直失败
                         //    （真机日志：`[browse] find ❌ 抓取失败 .../type/Cc-----.html` 反复出现）。
@@ -257,6 +265,40 @@ struct RecommendView: View {
         Task { await load(page: 1) }
     }
 
+    /// 首屏骨架 —— 形状**对齐 `RecommendCell`**（64×88 封面 + 三行文字），
+    /// 这样数据回来时是「占位被真实内容原地替换」，不会有跳变。
+    private var skeletonGrid: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                ForEach(0..<8, id: \.self) { i in
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.gray.opacity(0.16))
+                            .frame(width: 64, height: 88)
+                        VStack(alignment: .leading, spacing: 8) {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.gray.opacity(0.16))
+                                .frame(height: 13)
+                                .frame(maxWidth: i % 2 == 0 ? 190 : 150)
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.gray.opacity(0.12))
+                                .frame(width: 46, height: 12)
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.gray.opacity(0.10))
+                                .frame(width: 110, height: 10)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                }
+            }
+            .padding(.top, 8)
+        }
+        .allowsHitTesting(false)
+        .modifier(SkeletonPulse())
+    }
+
     private func load(page p: Int) async {
         guard let col = selectedColumn else { items = []; return }
         // 🔴 请求代校验：快速切图源/栏目时每次都会起新 Task，**先发的 explore 晚到**
@@ -280,6 +322,22 @@ struct RecommendView: View {
         if p == 1, r.isEmpty {
             hasMore = false
             moreMessage = "栏目暂无可解析内容"
+        }
+        if p == 1 { startPrefetch(r) }
+    }
+
+    /// 预取前几本书的**详情 HTML** —— 用户滑两下再点就是 0ms。
+    ///
+    /// 这是「打开漫画很慢」的正面解法：慢站的网络延迟无法消除，
+    /// 只能**在用户点击之前**把它走完。详见 `ComicEngine.prefetchDetails`。
+    private func startPrefetch(_ list: [SearchResult]) {
+        prefetchTask?.cancel()
+        guard !list.isEmpty else { return }
+        let seeds = list.prefix(6).map {
+            (noteUrl: $0.noteUrl, origin: $0.origin, headers: $0.noteHeaders)
+        }
+        prefetchTask = Task {
+            await ComicEngine.shared.prefetchDetails(seeds, limit: 6)
         }
     }
 
@@ -335,5 +393,20 @@ struct RecommendCell: View {
         }
         .padding(10)
         .hmdRowCard()
+    }
+}
+
+/// 骨架呼吸动画 —— 1.1 秒一次透明度往返。
+///
+/// 用 `.animation(_:value:)` 而不是 `withAnimation` 反复触发：
+/// 后者需要 Timer 驱动，页面切走时容易漏停；前者由 SwiftUI 自己管理生命周期。
+private struct SkeletonPulse: ViewModifier {
+    @State private var dim = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(dim ? 0.55 : 1)
+            .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: dim)
+            .onAppear { dim = true }
     }
 }
