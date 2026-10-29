@@ -455,7 +455,8 @@ final class ComicEngine {
     /// 发现/推荐栏目：规则占位符优先；没有占位符时跟随页面真实的「下一页」链接。
     /// 结果仍复用搜索列表规则解析，避免栏目页另造一套解析链。
     func browse(url: String, source: ComicSource, page: Int = 1,
-                extraHeaders: [String: String] = [:]) async -> [SearchResult] {
+                extraHeaders: [String: String] = [:],
+                forceRefresh: Bool = false) async -> [SearchResult] {
         let pagerKey = "COLUMN|\(source.bookSourceUrl)|\(url)"
         if page <= 1 { resetCursor(pagerKey) }
         // 发现页是最容易被坏源拖死的入口（一次要刷 20 个栏目）→ 熔断优先
@@ -491,11 +492,28 @@ final class ComicEngine {
 
         // 保留旧版的超时与 SPA/WebView 兜底，但留住 HTML 才能发现下一页。
         let method = req.httpMethod ?? "GET"
-        var html = await HttpFetcher.shared.fetchPage(requestUrl, method: method, body: body,
-                                                       headers: headers, timeout: 30)
-        if html.isEmpty, method.uppercased() == "GET" {
-            html = await HttpFetcher.shared.fetchPage(requestUrl, method: method, body: body,
-                                                       headers: headers, timeout: 30)
+        let loadColumnHTML: () async -> String = {
+            var t = await HttpFetcher.shared.fetchPage(requestUrl, method: method, body: body,
+                                                        headers: headers, timeout: 30)
+            if t.isEmpty, method.uppercased() == "GET" {
+                t = await HttpFetcher.shared.fetchPage(requestUrl, method: method, body: body,
+                                                        headers: headers, timeout: 30)
+            }
+            return t
+        }
+        // 🔴 栏目页也走**陈旧优先**（2026-10-29）：漫画台每次切回来/切栏目都要重新联网，
+        //    慢站 1~10 秒 —— 这是「打开漫画台时间太久」最主要的来源。
+        //    有旧结果就立刻渲染，后台静默刷新；下拉刷新（forceRefresh）仍然走真网络。
+        //    TTL 180s：漫画台的新番更新不需要秒级新鲜度，但也不能一直显示昨天的内容。
+        let columnCacheKey = "COLUMNHTML|\(source.bookSourceUrl)|\(requestUrl)"
+        var html: String
+        if forceRefresh {
+            html = await ResponseCache.shared.cached(
+                key: columnCacheKey, ttl: 180, forceRefresh: true,
+                fetch: loadColumnHTML) ?? ""
+        } else {
+            html = await ResponseCache.shared.cachedStale(
+                key: columnCacheKey, ttl: 180, fetch: loadColumnHTML) ?? ""
         }
         guard !html.isEmpty else {
             // 🔎 插桩：**抓取失败**（与「解析为空」完全不同的原因，修法也不同）
@@ -840,7 +858,8 @@ final class ComicEngine {
     }
 
     /// 栏目页 → 漫画卡片列表（复用搜索列表规则）
-    func explore(_ column: FindColumn, page: Int = 1) async -> [SearchResult] {
+    func explore(_ column: FindColumn, page: Int = 1,
+                 forceRefresh: Bool = false) async -> [SearchResult] {
         guard let s = ComicRepository.shared.source(url: column.origin) else {
             // 🔎 插桩：发现栏目点进去空白时，先确认**源还在不在**
             DiagLog.event("find", "explore",
@@ -854,7 +873,8 @@ final class ComicEngine {
         //    这里只替换列表四项，不动搜索、不动数据库。详见 `SourceContentPatch.sourceForExplore`。
         let r = await browse(url: column.url,
                              source: SourceContentPatch.sourceForExplore(s),
-                             page: page, extraHeaders: column.headers)
+                             page: page, extraHeaders: column.headers,
+                             forceRefresh: forceRefresh)
         // 🔎 插桩：栏目 URL、最终条目数 —— 「该栏目暂无内容」一看便知卡在哪
         DiagLog.event("find", "explore",
                       "栏目「\(column.title)」 url=\(DiagLog.safeURL(column.url)) → \(r.count) 条")

@@ -135,7 +135,7 @@ struct RecommendView: View {
                     .padding(.horizontal, 14)
                     .padding(.top, 6)
                 }
-                .refreshable { await load(page: 1) }
+                .refreshable { await load(page: 1, force: true) }
                 .sheet(isPresented: $showLogin) {
                     if let src = selectedSource {
                         NavigationStack { SourceLoginView(source: src) }
@@ -299,7 +299,7 @@ struct RecommendView: View {
         .modifier(SkeletonPulse())
     }
 
-    private func load(page p: Int) async {
+    private func load(page p: Int, force: Bool = false) async {
         guard let col = selectedColumn else { items = []; return }
         // 🔴 请求代校验：快速切图源/栏目时每次都会起新 Task，**先发的 explore 晚到**
         //    会用旧栏目的结果覆盖新栏目的 `items`（用户看到「切了没反应」或内容对不上）。
@@ -316,7 +316,7 @@ struct RecommendView: View {
             page = p
         }
         defer { if gen == loadGen { loading = false } }
-        let r = await ComicEngine.shared.explore(col, page: p)
+        let r = await ComicEngine.shared.explore(col, page: p, forceRefresh: force)
         guard gen == loadGen else { return }     // 晚到的旧结果：整段丢弃，不碰 items
         items = r
         if p == 1, r.isEmpty {
