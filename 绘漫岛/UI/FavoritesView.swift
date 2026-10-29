@@ -192,7 +192,8 @@ private struct FavoritePreview: View {
                     //    这里没有；走详情页既准确又不用猜。
                     if !item.noteUrl.isEmpty {
                         NavigationLink {
-                            ComicDetailView(noteUrl: item.noteUrl, origin: item.origin)
+                            ComicDetailView(noteUrl: item.noteUrl, origin: item.origin,
+                                           prefillName: item.comicName)
                         } label: {
                             Label("打开该漫画", systemImage: "book").font(.footnote)
                         }

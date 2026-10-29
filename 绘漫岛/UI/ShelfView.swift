@@ -108,7 +108,8 @@ struct ShelfView: View {
                 // 续读跳板：拉详情 → 定位到上次读到的那一章 → 直接进阅读器
                 ShelfContinueView(item: item)
             case .detail(let item):
-                ComicDetailView(noteUrl: item.noteUrl, origin: item.origin)
+                ComicDetailView(noteUrl: item.noteUrl, origin: item.origin,
+                                 prefillName: item.name, prefillCover: item.coverUrl)
             }
         }
         .toolbar {
@@ -696,7 +697,8 @@ struct ShelfContinueView: View {
                         Button("重试") { Task { await load() } }
                             .buttonStyle(.borderedProminent)
                         NavigationLink {
-                            ComicDetailView(noteUrl: item.noteUrl, origin: item.origin)
+                            ComicDetailView(noteUrl: item.noteUrl, origin: item.origin,
+                                 prefillName: item.name, prefillCover: item.coverUrl)
                         } label: { Text("去详情页") }
                         .buttonStyle(.bordered)
                     }

@@ -227,6 +227,14 @@ enum SelfCheck {
                 return c.ruleSearchList == "class.foo"
                     && c.ruleSearchName == s.ruleSearchName
             },
+            // 源 JSON 已用 `||` 兼容新旧 DOM 时，补丁**不能**把它降级成单选择器
+            Case(name: "发现补丁：已有 || 双选择器时不覆盖") {
+                var s = ComicSource()
+                s.bookSourceUrl = "https://www.tuku.cc"
+                s.ruleSearchList = "class.manga-content-item||class.swiper-card-item"
+                let c = SourceContentPatch.sourceForExplore(s)
+                return c.ruleSearchList == s.ruleSearchList
+            },
         ]
 
         var failed: [String] = []

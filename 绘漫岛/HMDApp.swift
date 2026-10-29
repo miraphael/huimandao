@@ -82,7 +82,7 @@ struct HMDApp: App {
                 let shortVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?"
                 let buildVer = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
                 DiagLog.event("app", "version",
-                              "构建指纹 build-197-tuku-find · App 版本 \(shortVer) (\(buildVer))")
+                              "构建指纹 build-198-instant-detail · App 版本 \(shortVer) (\(buildVer))")
 
                 // 🔴 一次性数据补丁：给内置图源补**正文图规则**。
                 //    真因：图源 JSON 写的是 `ruleContentList`，模型里没这个字段 →

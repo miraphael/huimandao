@@ -32,6 +32,18 @@ struct ComicDetailView: View {
     let noteUrl: String
     let origin: String
     let noteHeaders: [String: String]
+    /// 列表页已经知道的书名 / 封面 —— 用来**秒开**。
+    ///
+    /// 设计依据：用户从搜索/发现/书架点进来时，书名和封面**早就在手上了**，
+    /// 详情页却只拿到一个 URL，只能干等网络。于是「点开一本漫画」永远先看到
+    /// 转圈 +「正在连接图源并解析详情…」—— 用户的原话是
+    /// 「图源都加进软件了，为什么每次还要重新连接」。
+    ///
+    /// 有了这两个字段，进页面**第一帧**就能画出封面和书名（零网络），
+    /// 简介/章节区域用骨架占位。网络回来后再替换。
+    /// 为 nil 时退回原来的转圈（老调用点不受影响）。
+    let prefillName: String?
+    let prefillCover: String?
     @StateObject private var session: DetailSession
     @State private var ascending = true
     @State private var inShelf = false
@@ -50,10 +62,13 @@ struct ComicDetailView: View {
     private var info: ComicInfo? { session.info }
     private var loading: Bool { session.isLoading }
 
-    init(noteUrl: String, origin: String, noteHeaders: [String: String] = [:]) {
+    init(noteUrl: String, origin: String, noteHeaders: [String: String] = [:],
+         prefillName: String? = nil, prefillCover: String? = nil) {
         self.noteUrl = noteUrl
         self.origin = origin
         self.noteHeaders = noteHeaders
+        self.prefillName = prefillName
+        self.prefillCover = prefillCover
         _session = StateObject(wrappedValue: DetailSession(
             noteUrl: noteUrl, origin: origin, noteHeaders: noteHeaders))
     }
@@ -62,15 +77,19 @@ struct ComicDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if loading && info == nil {
-                    // 首屏在等详情页 HTML（慢站可能要几秒到几十秒）。只放一个转圈会让用户
-                    // 以为卡死；这里给出阶段文案 + 目标图源，明确「正在做什么」。
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("正在连接图源并解析详情…").font(.footnote).foregroundStyle(.secondary)
-                        Text(origin).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                    if let name = prefillName, !name.isEmpty {
+                        // 秒开：书名 + 封面立刻画出来，只有章节/简介是骨架
+                        prefillSkeleton(name: name, cover: prefillCover ?? "")
+                    } else {
+                        // 老路径（没有预填信息）：给阶段文案 + 目标图源，别让人以为卡死
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("正在连接图源并解析详情…").font(.footnote).foregroundStyle(.secondary)
+                            Text(origin).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 80)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 80)
                 }
                 if let info {
                     HStack(alignment: .top, spacing: 12) {
@@ -283,6 +302,68 @@ struct ComicDetailView: View {
 
     private func resumePage(for ch: ComicInfo.Chapter) -> Int {
         ResumeLocator.page(for: ch, info: info, progress: resumeProgress)
+    }
+
+    // MARK: - 秒开骨架
+
+    /// 预填骨架 —— 用列表页已有的书名/封面先撑起版面，网络数据回来再替换。
+    ///
+    /// 为什么值得单独写一个视图：详情页最慢的一段是「抓详情页 HTML」，
+    /// 慢站 1~2 秒、图床挂掉时能被图片重试拖到十几秒。这段时间里
+    /// **封面和书名其实一直都知道**，却让用户盯着一个转圈 —— 这是纯浪费。
+    private func prefillSkeleton(name: String, cover: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Group {
+                    if cover.isEmpty {
+                        Rectangle().fill(Color.primary.opacity(0.06))
+                    } else {
+                        CoverImage(url: cover, referer: origin)
+                    }
+                }
+                .frame(width: 110, height: 152)
+                .clipShape(RoundedRectangle(cornerRadius: isManga ? 0 : 8))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(name)
+                        .font(.title3.bold())
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    skeletonBar(width: 132, height: 11)
+                    skeletonBar(width: 84, height: 9)
+                    skeletonBar(width: 156, height: 9)
+                    Text("正在读取章节…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal)
+
+            // 主按钮位置占位（避免数据回来时整页跳动）
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 44)
+                .padding(.horizontal)
+
+            VStack(alignment: .leading, spacing: 8) {
+                skeletonBar(width: 64, height: 11)
+                skeletonBar(width: nil, height: 9)
+                skeletonBar(width: nil, height: 9)
+                skeletonBar(width: 180, height: 9)
+            }
+            .padding(.horizontal)
+        }
+        .padding(.top, 4)
+    }
+
+    /// 骨架条（`width: nil` = 撑满）
+    private func skeletonBar(width: CGFloat?, height: CGFloat) -> some View {
+        Capsule()
+            .fill(Color.primary.opacity(0.08))
+            .frame(width: width, height: height)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
     }
 
     // MARK: - 操作区（详情页主/次按钮）

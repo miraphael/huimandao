@@ -164,6 +164,9 @@ final class ChapterImageStore: ObservableObject {
     /// 图床级熔断：同一章节里连续 N 页 `notFound` → 判定「该源图床挂了」，
     /// 后面的页直接标失败，不再逐页发请求（包子实测：18 页 × 2 次重试 = 20 秒白等）。
     private var consecutiveNotFound = 0
+    /// 触发熔断的那一次失败原因 —— 熔断后**后续页要沿用同一个原因**，
+    /// 否则「域名连不上」会被显示成「图片地址失效（404）」，误导用户。
+    private var brokenReason: FailureReason? = nil
     private static let notFoundBreakLimit = 3
     /// 已经上报过「图床失效」的源（每个源每次启动只报一次，避免刷爆体检文件）
     private static var reportedBrokenHosts = Set<String>()
@@ -609,6 +612,7 @@ final class ChapterImageStore: ObservableObject {
         _failed.remove(index)
         _reasons.removeValue(forKey: index)
         consecutiveNotFound = 0          // 有图能出来 → 图床没挂，重置熔断
+        brokenReason = nil
         // 记下真实宽高比（**永不淘汰**）—— 布局靠它才算得准，见 `ratio(at:)`
         let w = image.size.width
         var isNewRatio = false
@@ -927,9 +931,12 @@ final class ChapterImageStore: ObservableObject {
         }
         // 🔴 图床级熔断：本会话里已经连续 3 页 404 → 判定该源图床失效，
         //    后面的页不再发请求（包子实测 18 页 × 2 次重试 = 白等 20 秒）。
-        lock.lock(); let broken = consecutiveNotFound >= Self.notFoundBreakLimit; lock.unlock()
+        lock.lock()
+        let broken = consecutiveNotFound >= Self.notFoundBreakLimit
+        let hostReason = brokenReason ?? .notFound
+        lock.unlock()
         if broken {
-            setFailed(index, .notFound)
+            setFailed(index, hostReason)
             reportBrokenImageHostOnce()
             return nil
         }
@@ -1073,15 +1080,45 @@ final class ChapterImageStore: ObservableObject {
                 }
             }
         }
-        // 图床级故障计数：连续 404 说明是**站点**挂了，不是这一页的问题
+        // 图床级故障计数：连续「拿不到图」说明是**站点/图床**挂了，不是这一页的问题。
+        //
+        // 🔴 2026-10-29 修（真机日志实证）：原来只数 404，于是
+        //    「域名解析失败 / 连不上」(-1004) 这类失败**永远不触发熔断** →
+        //    包子图床整站挂掉时，18 页 × 3 种头变体 × 2 次重试全部打满连接池，
+        //    连**详情页请求都被挤到 13 秒**（日志 d9 = 13367ms、d11 = 13801ms，
+        //    期间同一时刻在刷 s2.bzcdn.net 的 13/16/19/20 页）。
+        //    现在改成「任何 host 级失败」都计数，死图床 3 页内就会被短路。
         lock.lock()
-        if lastReason == .notFound { consecutiveNotFound += 1 } else { consecutiveNotFound = 0 }
+        if Self.isHostLevelFailure(lastReason) {
+            consecutiveNotFound += 1
+            brokenReason = lastReason
+        } else {
+            consecutiveNotFound = 0
+            brokenReason = nil
+        }
         lock.unlock()
         setFailed(index, lastReason)
         return nil
     }
 
-    /// 图床连续 404 → 把结论写进 `SourceHealth`，图源页会显示「正文 0 图」徽章。
+    /// 这个失败算不算「图床整体不可用」（而不是这一页自己的问题）。
+    ///
+    /// · `notFound`  404 —— 图床换了路径/失效
+    /// · `network`   DNS 失败 / 连不上 / TLS 失败 —— 域名或 IP 层就不通
+    /// · `timeout`   整站慢到超时
+    /// · `server`    5xx —— 站点自己挂了
+    /// · `blocked`   403/412 —— 整站防盗链拦截
+    ///
+    /// **不算**的：`ruleMiss`（URL 拼错，是规则问题）、`decode`（拿到字节但不是图，
+    /// 单页问题）、`needLogin`（登录后能恢复，不该被熔断挡住）。
+    private static func isHostLevelFailure(_ reason: FailureReason) -> Bool {
+        switch reason {
+        case .notFound, .network, .timeout, .server, .blocked: return true
+        case .ruleMiss, .needLogin, .decode, .unknown:         return false
+        }
+    }
+
+    /// 图床连续失败 → 把结论写进 `SourceHealth`，图源页会显示「正文 0 图」徽章。
     ///
     /// 意义：包子这类**整站图床失效**的源，用户在图源页一眼就能看到"这个源坏了"，
     /// 而不是打开章节、看到 18 页「图片地址失效」才知道。
@@ -1097,7 +1134,7 @@ final class ChapterImageStore: ObservableObject {
         let res = SourceCheckResult(
             name: s.bookSourceName, sourceUrl: s.bookSourceUrl,
             ok: false, ms: 0,
-            message: "正文图连续 \(Self.notFoundBreakLimit) 页 404（图床失效）",
+            message: "正文图连续 \(Self.notFoundBreakLimit) 页取不到（\(brokenReason?.title ?? "图床失效")）",
             checked: true, stage: "正文", chapters: 0, images: 0, probedContent: true)
         _ = SourceHealth.mergeObserved([res])
         DiagLog.event("img", "host",

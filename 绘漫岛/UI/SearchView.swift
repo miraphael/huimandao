@@ -408,7 +408,8 @@ struct FindColumnView: View {
             LazyVStack(spacing: 8) {
                 ForEach(results) { r in
                     NavigationLink {
-                        ComicDetailView(noteUrl: r.noteUrl, origin: r.origin)
+                        ComicDetailView(noteUrl: r.noteUrl, origin: r.origin,
+                                        prefillName: r.name, prefillCover: r.coverUrl)
                     } label: { ResultCell(r: r) }
                     .buttonStyle(.plain)   // 去掉 List 里的右箭头
                 }
@@ -449,7 +450,8 @@ struct HistoryView: View {
     private var content: some View {
         List(items) { h in
             NavigationLink {
-                ComicDetailView(noteUrl: h.noteUrl, origin: h.origin)
+                ComicDetailView(noteUrl: h.noteUrl, origin: h.origin,
+                                 prefillName: h.name, prefillCover: h.coverUrl)
             } label: {
                 HStack {
                     CoverImage(url: h.coverUrl).frame(width: 44, height: 60).clipShape(RoundedRectangle(cornerRadius: 5))

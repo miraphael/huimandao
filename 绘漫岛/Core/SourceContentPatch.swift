@@ -41,11 +41,21 @@ enum SourceContentPatch {
 
     /// 给 `explore()` 用的源副本：只替换「列表 / 书名 / 链接 / 封面」四项。
     ///
+    /// 🔴 2026-10-29 修正：**源 JSON 里已经有 `||` 双选择器时不要覆盖**。
+    ///    图库的源规则实际是
+    ///    `class.manga-content-item||class.swiper-card-item` —— 它同时兼容新旧两个 DOM，
+    ///    比这里的单选择器**更健壮**（站点改回去也不会挂）。
+    ///    昨天在真机上看到的「0 条」是因为**手机里存的是旧版源**（单选择器、无 `||`），
+    ///    正确修法是重新导入源，不是改代码。
+    ///    这里保留补丁，只为照顾「没重新导入过源」的用户；有 `||` 就原样返回。
+    ///
     /// 没有登记的源**原样返回** —— 零开销、零行为变化。
     static func sourceForExplore(_ s: ComicSource) -> ComicSource {
         guard let host = URL(string: s.bookSourceUrl)?.host?.lowercased(),
               let o = findListOverrides.first(where: { host.contains($0.key) })?.value
         else { return s }
+        // 库里已经是「兼容新旧 DOM」的规则 → 不要降级成单选择器
+        if (s.ruleSearchList ?? "").contains(o.list) { return s }
         var copy = s
         copy.ruleSearchList = o.list
         copy.ruleSearchName = o.name

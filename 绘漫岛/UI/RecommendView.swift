@@ -105,7 +105,8 @@ struct RecommendView: View {
                     LazyVStack(spacing: 8) {
                         ForEach(items) { r in
                             NavigationLink {
-                                ComicDetailView(noteUrl: r.noteUrl, origin: r.origin, noteHeaders: r.noteHeaders)
+                                ComicDetailView(noteUrl: r.noteUrl, origin: r.origin, noteHeaders: r.noteHeaders,
+                                                prefillName: r.name, prefillCover: r.coverUrl)
                             } label: {
                                 RecommendCell(r: r)
                             }
