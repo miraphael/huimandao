@@ -13,3 +13,8 @@ ciout/
 .zsign/
 _msg.txt
 _p*.py
+cm_last_build.txt
+cm_poll_out.txt
+cm_*.zip
+cm_*.log
+cm_openapi.json
