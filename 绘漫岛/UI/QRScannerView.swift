@@ -52,7 +52,7 @@ struct QRScannerView: View {
                     .stroke(Color.white.opacity(0.92), lineWidth: 2.5)
                     .frame(width: 260, height: 260)
                 Text(status)
-                    .font(.callout).fontWeight(.medium)
+                    .font(.callout.weight(.medium))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 16).padding(.vertical, 9)
                     .background(.black.opacity(0.62), in: Capsule())

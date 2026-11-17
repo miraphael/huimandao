@@ -9,7 +9,7 @@ import SwiftUI
 //
 // 策略：
 //   - NavigationStack → iOS 15 用 NavigationView(.stack)
-//   - .bold() → 用 .fontWeight(.bold) （所有版本可用）
+//   - .bold() / .fontWeight() / .tracking() → Font.weight / .kerning（iOS 13+）
 //   - .toolbar(.hidden, for:) → iOS 15 用 .navigationBarHidden / .toolbar(.hidden)
 //   - .presentationDetents → iOS 15 直接跳过（sheet 全高）
 //   - .listRowSeparator → iOS 15 直接跳过
@@ -52,10 +52,11 @@ struct HMDNavigationStackWithPath<Path: Hashable, Root: View>: View {
 
 extension View {
     /// iOS 16+ 的 `.bold()` 修饰符在 iOS 15 不可用。
-    /// 用 `.fontWeight(.bold)` 替代，所有版本通用。
+    /// ⚠️ `View.fontWeight(_:)` 同样是 iOS 16+，不能用！
+    /// 只能落到 Font 上：`.font(.body.weight(.bold))`（iOS 13+）。
     @ViewBuilder
     func hmdBold() -> some View {
-        self.fontWeight(.bold)
+        self.font(.body.weight(.bold))
     }
 }
 

@@ -124,7 +124,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("绘漫岛")
                         .font(.system(size: 19, weight: .bold, design: .rounded))
-                        .tracking(1.2)
+                        .kerning(1.2)
                     Text("v\(Self.version) · build \(Self.buildNumber)")
                         .font(.system(size: 11))
                         .opacity(0.82)

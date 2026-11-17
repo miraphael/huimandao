@@ -43,7 +43,7 @@ struct SourceQRExportView: View {
                             Text("第 \(index + 1) / \(items.count) 个图源")
                                 .font(.caption).foregroundStyle(.secondary)
                             Text(it.name)
-                                .font(.callout).fontWeight(.semibold)
+                                .font(.callout.weight(.semibold))
                             Text("压缩后 \(it.result.chars) 字符")
                                 .font(.caption2).foregroundStyle(.secondary)
 
@@ -63,7 +63,7 @@ struct SourceQRExportView: View {
                                     if index > 0 { index -= 1 }
                                 } label: {
                                     Label("上一个", systemImage: "chevron.left")
-                                        .font(.callout).fontWeight(.medium)
+                                        .font(.callout.weight(.medium))
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 10)
                                         .background(Color(.secondarySystemGroupedBackground),
@@ -76,7 +76,7 @@ struct SourceQRExportView: View {
                                     if index + 1 < items.count { index += 1 }
                                 } label: {
                                     Label("下一个", systemImage: "chevron.right")
-                                        .font(.callout).fontWeight(.medium)
+                                        .font(.callout.weight(.medium))
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 10)
                                         .background(Color(.secondarySystemGroupedBackground),
@@ -95,7 +95,7 @@ struct SourceQRExportView: View {
                             }
                         } label: {
                             Label("保存本张到相册", systemImage: "square.and.arrow.down")
-                                .font(.callout).fontWeight(.medium)
+                                .font(.callout.weight(.medium))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 11)
                                 .background(Color(.secondarySystemGroupedBackground),
@@ -112,7 +112,7 @@ struct SourceQRExportView: View {
                         VStack(spacing: 10) {
                             Image(systemName: "exclamationmark.triangle")
                                 .font(.system(size: 40)).foregroundStyle(.orange)
-                            Text("二维码生成失败").font(.callout).fontWeight(.medium)
+                            Text("二维码生成失败").font(.callout.weight(.medium))
                             Text(failMsg).font(.caption).foregroundStyle(.secondary)
                         }
                         .padding(.top, 60)

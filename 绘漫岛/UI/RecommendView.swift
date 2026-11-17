@@ -88,8 +88,7 @@ struct RecommendView: View {
                                 } label: {
                                     VStack(spacing: 4) {
                                         Text(col.title)
-                                            .font(.subheadline)
-                                            .fontWeight(selectedColumn?.id == col.id ? .bold : .regular)
+                                            .font(.subheadline.weight(selectedColumn?.id == col.id ? .bold : .regular))
                                             .foregroundStyle(selectedColumn?.id == col.id ? .primary : .secondary)
                                         Capsule()
                                             .fill(selectedColumn?.id == col.id ? Theme.accent : .clear)

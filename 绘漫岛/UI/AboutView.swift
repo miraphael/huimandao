@@ -26,7 +26,7 @@ struct AboutView: View {
                     // Legado `.about-hero__eyebrow`：大写强调色小标签
                     Text("HUIDAO ISLAND")
                         .font(.system(size: 12, weight: .bold))
-                        .tracking(2.2)
+                        .kerning(2.2)
                         .foregroundStyle(Theme.accent)
                     Image("AppIcon")
                         .resizable().scaledToFill()
@@ -41,7 +41,7 @@ struct AboutView: View {
                     VStack(spacing: 3) {
                         Text("绘漫岛")
                             .font(.system(size: 22, weight: .bold, design: .rounded))
-                            .tracking(1.6)
+                            .kerning(1.6)
                         Text("v\(Self.version) · build \(Self.build)")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)

@@ -66,7 +66,7 @@ struct RuleDebugView: View {
     var body: some View {
         Form {
             Section("① 抓哪个页面") {
-                TextField("https://站点/路径", text: $pageURL, axis: .vertical)
+                TextField("https://站点/路径", text: $pageURL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
@@ -79,11 +79,11 @@ struct RuleDebugView: View {
                 }
                 .pickerStyle(.segmented)
                 TextField(kind == .js ? "// 例如：result.match(/params='([^']+)'/)[1]" : "例如 class.item@tag.a",
-                          text: $ruleText, axis: .vertical)
+                          text: $ruleText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.system(.callout, design: .monospaced))
-                    .lineLimit(3...10)
+                    .lineLimit(10)
             }
 
             Section {

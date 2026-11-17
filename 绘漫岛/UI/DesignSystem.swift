@@ -118,13 +118,13 @@ struct HMDWordmark: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("绘漫岛")
                     .font(.system(size: size, weight: .bold, design: .rounded))
+                    .kerning(1.5)
                     .foregroundStyle(Theme.text)
-                    .tracking(1.5)
                 if let subtitle {
                     Text(subtitle)
                         .font(.system(size: size * 0.42, weight: .medium))
+                        .kerning(0.6)
                         .foregroundStyle(Theme.text.opacity(0.45))
-                        .tracking(0.6)
                 }
             }
         }

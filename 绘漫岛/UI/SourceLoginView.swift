@@ -29,7 +29,7 @@ struct SourceLoginView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(saving ? "保存中…" : "完成") { saveAndClose() }
-                        .fontWeight(.semibold)
+                        .font(.body.weight(.semibold))
                         .disabled(saving)
                 }
             }

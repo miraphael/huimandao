@@ -771,7 +771,7 @@ struct ReaderView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { showSettings = false }
-                        .fontWeight(.semibold)
+                        .font(.body.weight(.semibold))
                 }
             }
         }

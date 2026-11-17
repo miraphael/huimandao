@@ -14,7 +14,7 @@ struct HMDSectionHeader: View {
     var body: some View {
         Text(text)
             .font(.system(size: 13, weight: .semibold))
-            .tracking(0.6)
+            .kerning(0.6)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 4)
