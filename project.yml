@@ -13,7 +13,13 @@ packages:
     from: "5.3.0"
   SWCompression:
     url: https://github.com/miraphael/SWCompression
-    from: "4.9.3"
+    # ⚠️ 必须是 4.9.4（我们 fork 上自打的 tag）：上游 4.9.3 的
+    #    Package.swift 把最低版本写死成 iOS 16，部署目标降到 15 后会直接
+    #    编译失败（"compiling for iOS 15.0, but module 'SWCompression' has
+    #    a minimum deployment target of iOS 16.0"）。
+    #    4.9.4 只改了 platforms（iOS 15）并把 BitByteData 指向 2.1.2，
+    #    代码与 4.9.3 完全一致。BitByteData 同理（2.1.1 → 2.1.2）。
+    from: "4.9.4"
   # Nuke —— 业界成熟的图片加载/缓存/预取管线（Aidoku 用的就是它）。
   # 引入原因：手写的 ImageDiskCache + DecodedImageCache + 自定义并发闸门
   # 在「多图并发 + 磁盘 LRU + 解码」上要处理的边界太多，实测仍有「图片转圈」。
