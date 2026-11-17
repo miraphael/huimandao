@@ -76,38 +76,36 @@ extension View {
     }
 
     /// iOS 16+: `.toolbar(.hidden, for: .navigationBar)`
-    /// iOS 15:  `.navigationBarHidden(true)` + `.toolbar(.hidden)`
+    /// iOS 15:  `.navigationBarHidden(true)`（`.toolbar(_:)` 无 `for:` 的重载
+    ///          在 iOS 15 不存在，不能写）
     @ViewBuilder
     func hmdHideNavBar() -> some View {
         if #available(iOS 16.0, *) {
             self.toolbar(.hidden, for: .navigationBar)
         } else {
             self.navigationBarHidden(true)
-                .toolbar(.hidden)
         }
     }
 
     /// iOS 16+: `.toolbar(.visible, for: .navigationBar)`
-    /// iOS 15:  `.navigationBarHidden(false)` + `.toolbar(.visible)`
+    /// iOS 15:  `.navigationBarHidden(false)`
     @ViewBuilder
     func hmdShowNavBar() -> some View {
         if #available(iOS 16.0, *) {
             self.toolbar(.visible, for: .navigationBar)
         } else {
             self.navigationBarHidden(false)
-                .toolbar(.visible)
         }
     }
 
     /// iOS 16+: `.toolbar(.visible/.hidden, for: .navigationBar)` 按条件显隐
-    /// iOS 15:  `.navigationBarHidden(!visible)` + `.toolbar(visible ? .visible : .hidden)`
+    /// iOS 15:  `.navigationBarHidden(!visible)`
     @ViewBuilder
     func hmdNavBarVisibility(_ visible: Bool) -> some View {
         if #available(iOS 16.0, *) {
             self.toolbar(visible ? .visible : .hidden, for: .navigationBar)
         } else {
             self.navigationBarHidden(!visible)
-                .toolbar(visible ? .visible : .hidden)
         }
     }
 }
