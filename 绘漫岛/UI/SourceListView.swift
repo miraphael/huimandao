@@ -101,7 +101,7 @@ struct SourceListView: View {
         if embedded {
             content
         } else {
-            NavigationStack { contentWithSheets }
+            HMDNavigationStack { contentWithSheets }
         }
     }
 
@@ -120,7 +120,7 @@ struct SourceListView: View {
         .transparentScrollBackground()
         .listStyle(.plain)
         .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
+        .hmdListRowSeparatorHidden()
     }
 
     private var content: some View {
@@ -201,7 +201,7 @@ struct SourceListView: View {
                                         set: { if !$0 { shareItems = nil } })) {
                 ShareSheet(items: shareItems ?? [])
             }
-            .sheet(isPresented: $showCheck) { NavigationStack { SourceCheckView() } }
+            .sheet(isPresented: $showCheck) { HMDNavigationStack { SourceCheckView() } }
     }
 
     /// 各种弹层单独一段 —— 一条链上挂 10+ 个 sheet 会把 SwiftUI 的
@@ -210,7 +210,7 @@ struct SourceListView: View {
     private var contentWithSheets: some View {
         content
             .fullScreenCover(item: $verifyTarget) { t in
-                NavigationStack {
+                HMDNavigationStack {
                     ManualVerifyView(presetURL: t.url)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
@@ -220,7 +220,7 @@ struct SourceListView: View {
                 }
             }
             .sheet(item: $debugSource) { src in
-                NavigationStack {
+                HMDNavigationStack {
                     RuleDebugView(presetBaseURL: src.bookSourceUrl)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
@@ -230,13 +230,13 @@ struct SourceListView: View {
                 }
             }
             .sheet(item: $loginSource) { src in
-                NavigationStack { SourceLoginView(source: src) }
+                HMDNavigationStack { SourceLoginView(source: src) }
             }
             .sheet(isPresented: $showEditor) {
-                NavigationStack { SourceEditorView(source: nil) { reload() } }
+                HMDNavigationStack { SourceEditorView(source: nil) { reload() } }
             }
             .sheet(item: $editingSource) { src in
-                NavigationStack { SourceEditorView(source: src) { reload() } }
+                HMDNavigationStack { SourceEditorView(source: src) { reload() } }
             }
             .onAppear { reload() }
             // 导入 / 删除 / 启停后**立即刷新**，不必杀掉 App 重开
@@ -988,12 +988,12 @@ struct ImportSheet: View {
     @State private var text = ""
     @State private var fromWeb = ""
     @State private var showFilePicker = false
-    @State private var pickedPhoto: PhotosPickerItem? = nil
+    @State private var showPhotoPicker = false  // iOS 15 UIImagePicker fallback
     @State private var showScanner = false
     @State private var resultMsg: String? = nil
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             Form {
                 Section("粘贴图源 JSON（支持 Legado 漫画源/原版加密源）") {
                     TextEditor(text: $text).frame(minHeight: 160).font(.caption)
@@ -1002,7 +1002,9 @@ struct ImportSheet: View {
                     Button {
                         showFilePicker = true
                     } label: { Label("从文件导入（JSON/TXT）", systemImage: "doc") }
-                    PhotosPicker(selection: $pickedPhoto, matching: .images) {
+                    Button {
+                        showPhotoPicker = true
+                    } label: {
                         Label("从相册二维码导入", systemImage: "qrcode.viewfinder")
                     }
                     Button {
@@ -1054,7 +1056,7 @@ struct ImportSheet: View {
             .navigationTitle("导入图源")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             .sheet(isPresented: $showScanner) {
-                NavigationStack { QRScannerView() }
+                HMDNavigationStack { QRScannerView() }
             }
             .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.json, .text, .data]) { result in
                 guard case .success(let url) = result else {
@@ -1083,40 +1085,8 @@ struct ImportSheet: View {
                     DiagLog.event("import", "file", "解析失败 \(data.count) B：\(why)")
                 }
             }
-            .onChange(of: pickedPhoto) { item in
-                guard let item else { return }
-                Task {
-                    if let data = try? await item.loadTransferable(type: Data.self),
-                       let img = UIImage(data: data), let code = QRDecoder.decode(img) {
-                        // 图源码：单张就含全部数据，相册识图也能直接导入
-                        if SourceQRCodec.isSourceCode(code) {
-                            if let json = SourceQRCodec.decode(code) {
-                                let n = importText(json)
-                                resultMsg = n > 0 ? "✅ 从图片导入 \(n) 条图源" : "❌ 图源码解析不出图源"
-                                if n > 0 { onDone() }
-                            } else {
-                                resultMsg = "❌ 图源码解析失败"
-                            }
-                            pickedPhoto = nil
-                            return
-                        }
-                        resultMsg = "⏳ 已识别二维码，正在下载…"
-                        let fetched = await HttpFetcher.shared.fetchText(code)
-                        let trimmed = fetched.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if trimmed.isEmpty {
-                            resultMsg = "❌ 链接下载失败（\(code)）——该站点可能需要网络代理"
-                        } else if trimmed.hasPrefix("<") || trimmed.contains("<html") {
-                            resultMsg = "❌ 链接返回网页而非图源（需要网络代理）：\(code)"
-                        } else {
-                            let n = importText(fetched)
-                            resultMsg = n > 0 ? "✅ 二维码导入 \(n) 条图源" : "❌ 下载到 \(trimmed.count) 字符但不是有效图源"
-                            if n > 0 { onDone() }
-                        }
-                    } else {
-                        resultMsg = "❌ 二维码识别失败或内容无效"
-                    }
-                    pickedPhoto = nil
-                }
+            .sheet(isPresented: $showPhotoPicker) {
+                ImagePicker(onPick: { img in handlePickedImage(img) })
             }
         }
     }
@@ -1126,6 +1096,39 @@ struct ImportSheet: View {
         ComicRepository.shared.saveSources(list)
         DiagLog.event("import", "ok", "\(t.count) 字符 → \(list.count) 条图源")
         return list.count
+    }
+
+    /// 从相册选图后处理二维码识别 + 图源导入
+    private func handlePickedImage(_ img: UIImage) {
+        Task {
+            guard let code = QRDecoder.decode(img) else {
+                resultMsg = "❌ 二维码识别失败或内容无效"
+                return
+            }
+            // 图源码：单张就含全部数据，相册识图也能直接导入
+            if SourceQRCodec.isSourceCode(code) {
+                if let json = SourceQRCodec.decode(code) {
+                    let n = importText(json)
+                    resultMsg = n > 0 ? "✅ 从图片导入 \(n) 条图源" : "❌ 图源码解析不出图源"
+                    if n > 0 { onDone() }
+                } else {
+                    resultMsg = "❌ 图源码解析失败"
+                }
+                return
+            }
+            resultMsg = "⏳ 已识别二维码，正在下载…"
+            let fetched = await HttpFetcher.shared.fetchText(code)
+            let trimmed = fetched.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                resultMsg = "❌ 链接下载失败（\(code)）——该站点可能需要网络代理"
+            } else if trimmed.hasPrefix("<") || trimmed.contains("<html") {
+                resultMsg = "❌ 链接返回网页而非图源（需要网络代理）：\(code)"
+            } else {
+                let n = importText(fetched)
+                resultMsg = n > 0 ? "✅ 二维码导入 \(n) 条图源" : "❌ 下载到 \(trimmed.count) 字符但不是有效图源"
+                if n > 0 { onDone() }
+            }
+        }
     }
 }
 

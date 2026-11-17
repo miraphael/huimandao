@@ -225,13 +225,13 @@ struct ComicDetailView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         // ── 三个去向：用显式布尔驱动，避免 NavigationLink 复用 destination ──
-        .navigationDestination(isPresented: $navRead) { readDestination }
-        .navigationDestination(isPresented: $navDownload) {
+        .hmdNavigationDestination(isPresented: $navRead) { readDestination }
+        .hmdNavigationDestination(isPresented: $navDownload) {
             if let info {
                 ChapterListView(info: info, resumeProgress: resumeProgress, downloadMode: true)
             }
         }
-        .navigationDestination(isPresented: $navSwitch) {
+        .hmdNavigationDestination(isPresented: $navSwitch) {
             if let info {
                 // ⚠️ `SearchResult` 的 memberwise init **实参顺序必须与属性声明一致**
                 MultiSourceDetail(name: info.name, firstHit: SearchResult(
@@ -473,7 +473,7 @@ struct ChapterListView: View {
                     }
                 }
             }
-            .listRowSeparator(isManga ? .hidden : .automatic)
+            .hmdListRowSeparator(!(isManga))
             // ⚠️ 本页长期处于 editMode(.active)，`swipeActions` 在编辑模式下不生效，
             //    所以删除入口用长按 contextMenu 而不是侧滑。
             .contextMenu {

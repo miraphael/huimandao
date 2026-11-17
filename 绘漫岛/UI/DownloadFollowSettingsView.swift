@@ -33,7 +33,7 @@ struct DownloadFollowSettingsView: View {
                 Stepper("间隔 \(Int(followHours)) 小时", value: $followHours, in: 1...72)
                     .disabled(!followAuto)
                 Stepper("追更线程 \(s.refreshThreads)", value: $s.refreshThreads, in: 1...8)
-                LabeledContent("上次追更", value: follower.lastRunText)
+                HMDLabeledContent("上次追更", value: follower.lastRunText)
                 if follower.running {
                     HStack(spacing: 8) {
                         ProgressView().scaleEffect(0.7)

@@ -15,7 +15,7 @@ struct SourceGroupManageView: View {
     @State private var deleting: String? = nil
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             Group {
                 if groups.isEmpty {
                     VStack(spacing: 10) {

@@ -35,7 +35,7 @@ struct RecommendView: View {
         if embedded {
             content
         } else {
-            NavigationStack { content }
+            HMDNavigationStack { content }
         }
     }
 
@@ -142,7 +142,7 @@ struct RecommendView: View {
                 .refreshable { await load(page: 1, force: true) }
                 .sheet(isPresented: $showLogin) {
                     if let src = selectedSource {
-                        NavigationStack { SourceLoginView(source: src) }
+                        HMDNavigationStack { SourceLoginView(source: src) }
                     }
                 }
                 // 🔴 登录 sheet 关闭后**立即重载栏目** —— 令牌已进 CookieStore，

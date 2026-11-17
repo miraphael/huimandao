@@ -24,7 +24,7 @@ struct ReaderSettingsView: View {
                 Toggle("双击缩放", isOn: $s.doubleTapZoom)
                 // 「常亮」移到阅读器内的设置面板（那是阅读时的 comfort 项，
                 //  放全局设置里语义不对 —— H2：两套 UI 按「全局行为 vs 本次阅读」划界）
-                LabeledContent("自动保存进度", value: "始终开启")
+                HMDLabeledContent("自动保存进度", value: "始终开启")
             } header: {
                 Label("阅读设置", systemImage: "book")
             } footer: {

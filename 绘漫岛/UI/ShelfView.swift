@@ -26,7 +26,7 @@ struct ShelfView: View {
         if embedded {
             content
         } else {
-            NavigationStack { content }
+            HMDNavigationStack { content }
         }
     }
 
@@ -61,12 +61,13 @@ struct ShelfView: View {
                             ForEach(shownItems) { item in
                                 // 点击 = 直接续读（对齐安卓 BookShelfFragment.i(int)：
                                 // 后台拉详情+章节 → 直接进阅读器，而不是进简介页）
-                                NavigationLink(value: ShelfRoute.continue_(item)) {
+                                NavigationLink(destination: ShelfContinueView(item: item)) {
                                     // 传入**整张书架列表**：预取邻居时不必每个 cell 重查全表
                                     ShelfCell(item: item, all: shownItems)
                                 }
                                 .contextMenu {
-                                    NavigationLink(value: ShelfRoute.detail(item)) {
+                                    NavigationLink(destination: ComicDetailView(noteUrl: item.noteUrl, origin: item.origin,
+                                                                                  prefillName: item.name, prefillCover: item.coverUrl)) {
                                         Label("查看详情", systemImage: "info.circle")
                                     }
                                     Menu("移动到分组") {
@@ -102,16 +103,6 @@ struct ShelfView: View {
         //    整条隐藏会把筛选入口一起干掉；而且详情页的返回按钮也依赖它。
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: ShelfRoute.self) { route in
-            switch route {
-            case .continue_(let item):
-                // 续读跳板：拉详情 → 定位到上次读到的那一章 → 直接进阅读器
-                ShelfContinueView(item: item)
-            case .detail(let item):
-                ComicDetailView(noteUrl: item.noteUrl, origin: item.origin,
-                                 prefillName: item.name, prefillCover: item.coverUrl)
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 // 分组筛选（对应 ComicShelfGroupBean 分组 Tab）
@@ -423,11 +414,12 @@ struct ShelfPanelGrid: View {
 
     @ViewBuilder
     private func link(_ p: ShelfPanel) -> some View {
-        NavigationLink(value: ShelfRoute.continue_(p.item)) {
+        NavigationLink(destination: ShelfContinueView(item: p.item)) {
             MangaShelfCell(item: p.item, all: items, panelHeight: p.height)
         }
         .contextMenu {
-            NavigationLink(value: ShelfRoute.detail(p.item)) {
+            NavigationLink(destination: ComicDetailView(noteUrl: p.item.noteUrl, origin: p.item.origin,
+                                                         prefillName: p.item.name, prefillCover: p.item.coverUrl)) {
                 Label("查看详情", systemImage: "info.circle")
             }
             Menu("移动到分组") {
@@ -737,7 +729,7 @@ struct ShelfContinueView: View {
         .navigationBarTitleDisplayMode(.inline)
         // 只有「加载中 / 失败」两个阶段藏导航栏；进入阅读器后交还给 ReaderView，
         // 否则它自己的章节名标题和设置菜单会被一起藏掉。
-        .toolbar(phase == .ready ? .visible : .hidden, for: .navigationBar)
+        .hmdNavBarVisibility(phase == .ready)
         .task { if info == nil { await load() } }
     }
 

@@ -129,7 +129,7 @@ struct AppShellView: View {
 
     /// 扩展页：JS 源 / 插件（目前是 JS 图源，后续接入更多扩展类型）
     private var extensionsPage: some View {
-        NavigationStack {
+        HMDNavigationStack {
             JSSourceListView()
                 .transparentScrollBackground()
                 .navigationTitle("扩展")

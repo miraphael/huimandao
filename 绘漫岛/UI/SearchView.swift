@@ -28,7 +28,7 @@ struct SearchView: View {
         if embedded {
             core
         } else {
-            NavigationStack { core }
+            HMDNavigationStack { core }
         }
     }
 
@@ -368,7 +368,7 @@ struct FindView: View {
         if embedded {
             content
         } else {
-            NavigationStack { content }
+            HMDNavigationStack { content }
         }
     }
 
@@ -457,7 +457,7 @@ struct HistoryView: View {
         if embedded {
             content
         } else {
-            NavigationStack { content }
+            HMDNavigationStack { content }
         }
     }
 
@@ -494,7 +494,7 @@ struct LocalView: View {
         if embedded {
             content
         } else {
-            NavigationStack { content }
+            HMDNavigationStack { content }
         }
     }
 

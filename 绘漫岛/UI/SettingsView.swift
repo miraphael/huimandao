@@ -284,7 +284,7 @@ struct SettingsView: View {
     // MARK: - 页面
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
                     // 品牌 + 账号 + 统计合并成**一块**，避免两块渐变大卡叠在一起（视觉太重）

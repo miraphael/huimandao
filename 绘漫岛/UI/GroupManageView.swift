@@ -23,7 +23,7 @@ struct GroupManageView: View {
     @State private var newGroupName = ""
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             List {
                 Section {
                     row(title: "全部", count: nil, isSelected: selectedGroup == nil) {

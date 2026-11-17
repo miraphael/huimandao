@@ -104,7 +104,7 @@ struct ReprobePackView: View {
             load(t)
         }
         .sheet(isPresented: $showURLSheet) {
-            NavigationStack {
+            HMDNavigationStack {
                 Form {
                     Section("补丁包地址") {
                         TextField("https://.../reprobe_pack.json", text: $urlText)

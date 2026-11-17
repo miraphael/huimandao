@@ -28,7 +28,7 @@ struct DownloadTasksView: View {
         if embedded {
             content
         } else {
-            NavigationStack { content }
+            HMDNavigationStack { content }
         }
     }
 
@@ -64,8 +64,8 @@ struct DownloadTasksView: View {
 
             // 已下载（离线可读）的章节汇总 —— 让「下载到底存哪了、占多大」可见
             Section {
-                LabeledContent("已下载章节", value: "\(offlineCount) 话")
-                LabeledContent("占用空间", value: byteText(offlineSize))
+                HMDLabeledContent("已下载章节", value: "\(offlineCount) 话")
+                HMDLabeledContent("占用空间", value: byteText(offlineSize))
                 Text("已下载的章节打开时**不联网**，直接从本地读取。在章节列表长按可删除单话下载。")
                     .font(.caption2).foregroundStyle(.secondary)
                 if offlineCount > 0 {

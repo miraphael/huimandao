@@ -257,7 +257,7 @@ struct ReaderView: View {
                 // 同上：不要让阅读器的深色环境把设置面板染黑
                 .environment(\.colorScheme, Theme.isDark ? .dark : .light)
         }
-        .toolbar(.hidden, for: .tabBar)
+        .hmdHideTabBar()
         // 自绘底栏（AppShellView）也要跟着隐藏 —— 阅读必须全屏沉浸
         .onAppear { ShellBarState.shared.hide(owner: barOwner) }
         .onDisappear { ShellBarState.shared.restore(owner: barOwner) }
@@ -269,7 +269,7 @@ struct ReaderView: View {
         .navigationBarTitleDisplayMode(.inline)
         // 系统导航栏**永久隐藏**，顶部信息改由自绘浮层 `readerChrome` 承担 ——
         // 显隐不改变安全区，也就不会把画面顶来顶去。
-        .toolbar(.hidden, for: .navigationBar)
+        .hmdHideNavBar()
         // 🔴 再加一道保险（2026-10-17 用户反馈「左上角返回箭头没隐藏」）：
         //    `.toolbar(.hidden)` 在部分路径下（尤其是被 `navigationDestination` 推入、
         //    或导航栏被父级重新显式）可能不生效，系统自带的返回箭头就会留在左上角 ——
@@ -399,7 +399,7 @@ struct ReaderView: View {
 
     /// 章节列表面板 —— 阅读到一半想换章时不用翻到章末，也不用去设置里点「下一章」。
     private var chapterListSheet: some View {
-        NavigationStack {
+        HMDNavigationStack {
             ScrollViewReader { proxy in
                 List {
                     ForEach(Array(info.chapters.enumerated()), id: \.offset) { idx, ch in
@@ -444,7 +444,7 @@ struct ReaderView: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .hmdPresentationDetents([.medium, .large])
     }
 
     /// 当前页是否已收藏（按钮状态）
@@ -682,7 +682,7 @@ struct ReaderView: View {
     ///    —— 三者混排时菜单的宽高被反复重算，表现出来就是整个菜单框在抖。
     ///    换成固定宽度的 `Form` 面板后布局完全可控，控件也更好点。
     private var readerSettingsSheet: some View {
-        NavigationStack {
+        HMDNavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
                     settingsCard("显示", icon: "sun.max.fill") {

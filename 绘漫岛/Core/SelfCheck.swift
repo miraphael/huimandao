@@ -329,6 +329,18 @@ enum SelfCheck {
                 b.reset()
                 return !b.hidden
             },
+            // ── iOS 15 兼容层（build-206-ios15-compat）──────────────────
+            Case(name: "兼容层：HMDPresentationDetent 映射正确") {
+                // iOS 16+ 才有 PresentationDetent，但 enum 本身不依赖版本
+                let medium = HMDPresentationDetent.medium
+                let large = HMDPresentationDetent.large
+                if #available(iOS 16.0, *) {
+                    return medium.toDetent == .medium && large.toDetent == .large
+                } else {
+                    // iOS 15 下 enum 仍可用，只是 toDetent 不可调用
+                    return true
+                }
+            },
         ]
 
         var failed: [String] = []

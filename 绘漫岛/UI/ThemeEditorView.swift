@@ -385,7 +385,7 @@ struct ThemeEditView: View {
                         for n in pendingDelete { store.deleteBackground(named: n) }
                         pendingDelete.removeAll()
                         dismiss()
-                    }.bold()
+                    }.fontWeight(.bold)
                 }
             }
             .sheet(isPresented: $pickerShown) {

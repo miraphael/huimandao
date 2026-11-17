@@ -60,7 +60,7 @@ struct SourceDiagnoseView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: icon(st.level))
                                     .foregroundStyle(color(st.level))
-                                Text(st.title).font(.subheadline).bold()
+                                Text(st.title).font(.subheadline.weight(.bold))
                                 Spacer()
                                 if st.ms > 0 {
                                     Text("\(st.ms)ms").font(.caption2).foregroundStyle(.secondary)

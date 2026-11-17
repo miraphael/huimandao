@@ -47,8 +47,8 @@ struct FavoritesView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    LabeledContent("张数", value: "\(session.count)")
-                    LabeledContent("占用", value: session.sizeText)
+                    HMDLabeledContent("张数", value: "\(session.count)")
+                    HMDLabeledContent("占用", value: session.sizeText)
                     Divider()
                     Button {
                         confirmPrune = true
@@ -159,7 +159,7 @@ private struct FavoritePreview: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             ScrollView([.horizontal, .vertical]) {
                 if let img = UIImage(contentsOfFile: FavoriteStore.shared.fileURL(for: item).path) {
                     Image(uiImage: img).resizable().scaledToFit()

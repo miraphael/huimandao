@@ -24,7 +24,7 @@ struct SourceQRExportView: View {
     @State private var toast: String? = nil
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     if !items.isEmpty, index < items.count {

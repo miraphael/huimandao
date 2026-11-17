@@ -20,7 +20,7 @@ struct ComicTabView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             Group {
                 switch tab {
                 case 1: DownloadTasksView(embedded: true)

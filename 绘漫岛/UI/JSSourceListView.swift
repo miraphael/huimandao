@@ -144,10 +144,10 @@ struct JSSourceImportSheet: View {
     @State private var fromWeb = ""
     @State private var downloading = false
     @State private var showFilePicker = false
-    @State private var pickedPhoto: PhotosPickerItem? = nil
+    @State private var showPhotoPicker = false  // iOS 15 UIImagePicker fallback
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             Form {
                 Section {
                     TextEditor(text: $text)
@@ -166,7 +166,9 @@ struct JSSourceImportSheet: View {
                     Button {
                         showFilePicker = true
                     } label: { Label("从文件导入（JSON/TXT）", systemImage: "doc") }
-                    PhotosPicker(selection: $pickedPhoto, matching: .images) {
+                    Button {
+                        showPhotoPicker = true
+                    } label: {
                         Label("从相册二维码导入", systemImage: "qrcode.viewfinder")
                     }
                 } header: {
@@ -196,15 +198,15 @@ struct JSSourceImportSheet: View {
                 // ── 校验结果 ──
                 if let m = preview {
                     Section("校验通过") {
-                        LabeledContent("名称", value: m.name)
-                        LabeledContent("标识", value: m.id)
-                        LabeledContent("版本", value: m.version)
-                        LabeledContent("主域", value: m.domain)
-                        LabeledContent("API 版本", value: "\(m.apiVersion)")
-                        LabeledContent("运行时", value: m.effectiveRuntime.displayName)
-                        LabeledContent("能力", value: capabilityText(m))
+                        HMDLabeledContent("名称", value: m.name)
+                        HMDLabeledContent("标识", value: m.id)
+                        HMDLabeledContent("版本", value: m.version)
+                        HMDLabeledContent("主域", value: m.domain)
+                        HMDLabeledContent("API 版本", value: "\(m.apiVersion)")
+                        HMDLabeledContent("运行时", value: m.effectiveRuntime.displayName)
+                        HMDLabeledContent("能力", value: capabilityText(m))
                         if let hs = m.headers, !hs.isEmpty {
-                            LabeledContent("附加请求头", value: "\(hs.count) 项")
+                            HMDLabeledContent("附加请求头", value: "\(hs.count) 项")
                         }
                     }
                     Section {
@@ -246,9 +248,8 @@ struct JSSourceImportSheet: View {
                           allowedContentTypes: [.json, .text, .data]) { result in
                 handleFile(result)
             }
-            .onChange(of: pickedPhoto) { item in
-                guard let item else { return }
-                Task { await handlePhoto(item) }
+            .sheet(isPresented: $showPhotoPicker) {
+                ImagePicker(onPick: { img in Task { await handlePhoto(img) } })
             }
         }
     }
@@ -274,16 +275,10 @@ struct JSSourceImportSheet: View {
     }
 
     /// 从相册二维码导入：二维码内容可能是 manifest JSON 本身，也可能是一个下载链接
-    private func handlePhoto(_ item: PhotosPickerItem) async {
-        defer { pickedPhoto = nil }
+    private func handlePhoto(_ img: UIImage) async {
         preview = nil
         previewError = nil
         resultMsg = nil
-        guard let data = try? await item.loadTransferable(type: Data.self),
-              let img = UIImage(data: data) else {
-            previewError = "图片读取失败"
-            return
-        }
         guard let code = QRDecoder.decode(img) else {
             previewError = "未识别到二维码（换一张更清晰的图试试）"
             return
@@ -427,7 +422,7 @@ struct JSSourceEditorSheet: View {
     @State private var headersText = ""
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             Group {
                 if let m = draft {
                     editor(m)
@@ -465,7 +460,7 @@ struct JSSourceEditorSheet: View {
             set: { draft = $0 })
         Form {
             Section {
-                LabeledContent("标识", value: id)
+                HMDLabeledContent("标识", value: id)
                 TextField("显示名", text: b.name)
                     .autocorrectionDisabled()
                 TextField("版本（如 1.0）", text: b.version)
@@ -482,7 +477,7 @@ struct JSSourceEditorSheet: View {
             }
 
             Section {
-                LabeledContent("apiVersion", value: "\(base.apiVersion)")
+                HMDLabeledContent("apiVersion", value: "\(base.apiVersion)")
                 Text("当前版本支持的区间为 1…1，脚本不匹配时会被拒绝加载。")
                     .font(.caption2).foregroundStyle(.secondary)
             } header: {
@@ -636,14 +631,14 @@ struct JSSourceTestSheet: View {
     @State private var caps: ProviderCapabilities = []
 
     var body: some View {
-        NavigationStack {
+        HMDNavigationStack {
             Form {
                 Section {
-                    LabeledContent("名称", value: item.name)
-                    LabeledContent("标识", value: item.id)
-                    LabeledContent("主域", value: item.domain.isEmpty ? "（未声明）" : item.domain)
+                    HMDLabeledContent("名称", value: item.name)
+                    HMDLabeledContent("标识", value: item.id)
+                    HMDLabeledContent("主域", value: item.domain.isEmpty ? "（未声明）" : item.domain)
                     if !caps.isEmpty {
-                        LabeledContent("能力", value: capabilityText)
+                        HMDLabeledContent("能力", value: capabilityText)
                     }
                 } header: {
                     Text("源信息")
